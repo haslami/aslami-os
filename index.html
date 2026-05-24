@@ -166,14 +166,11 @@
   ul.list li .del:hover{opacity:1}
   .empty{color:var(--text-dim);font-size:12px;font-style:italic;padding:6px 4px}
 
-  /* ===== Capital / money tiles ===== */
-  .money-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
-  .money-tile{border:1px solid var(--line);border-radius:12px;padding:16px 14px;text-align:center;cursor:pointer;
-    background:rgba(255,255,255,.02);transition:.2s}
-  .money-tile:hover{border-color:var(--gold);box-shadow:0 0 18px rgba(255,178,46,.2);transform:translateY(-2px)}
-  .money-label{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-dim)}
-  .money-val{font-size:clamp(22px,2.6vw,30px);font-weight:800;margin:8px 0 6px;font-family:'Consolas',monospace}
-  .money-edit{font-size:10px;color:var(--text-dim);opacity:.7}
+  /* ===== Due date badge ===== */
+  .due{font-size:10px;font-family:'Consolas',monospace;padding:2px 7px;border-radius:12px;
+    border:1px solid var(--line);color:var(--text-dim);white-space:nowrap;flex:0 0 auto;margin-left:auto}
+  .due.soon{color:var(--gold-bright);border-color:rgba(255,178,46,.5)}
+  .due.overdue{color:var(--red);border-color:rgba(255,77,77,.5)}
 
   /* ===== Suggested missions ===== */
   .sugg{display:flex;flex-direction:column;gap:9px}
@@ -397,7 +394,7 @@
     .glass{width:30px;height:36px}
     .goal-cols{grid-template-columns:1fr;gap:14px}
     .task-cols{grid-template-columns:1fr;gap:18px}
-    .money-grid{grid-template-columns:1fr 1fr;gap:10px}
+    /* money section removed */
     .goal-tabs button,.day-tabs button{padding:8px 13px;font-size:12px}
     .vision{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
     .keypad{grid-template-columns:repeat(3,64px);gap:12px}
@@ -525,14 +522,6 @@
       </div>
     </div>
 
-    <!-- CAPITAL / MONEY -->
-    <div class="col-12">
-      <div class="panel">
-        <h2><span class="icn">$</span> Capital <span class="tag" id="moneyUpdated">TAP A TILE TO UPDATE</span></h2>
-        <div class="money-grid" id="moneyGrid"></div>
-      </div>
-    </div>
-
     <!-- TASKS (Matrix · Personal · Real Estate) -->
     <div class="col-12">
       <div class="panel">
@@ -542,6 +531,7 @@
             <div class="task-head matrix">▸ Matrix</div>
             <div class="additem">
               <input id="in-matrix" placeholder="Add Matrix task..." />
+              <input id="in-matrix-due" type="date" style="width:130px;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:8px;color:var(--text-dim);padding:8px 6px;font-size:12px" title="Due date (optional)" />
               <button data-add="matrix">+</button>
             </div>
             <ul class="list" id="list-matrix"></ul>
@@ -550,6 +540,7 @@
             <div class="task-head personal">▸ Personal</div>
             <div class="additem">
               <input id="in-personal" placeholder="Add personal task..." />
+              <input id="in-personal-due" type="date" style="width:130px;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:8px;color:var(--text-dim);padding:8px 6px;font-size:12px" title="Due date (optional)" />
               <button data-add="personal">+</button>
             </div>
             <ul class="list" id="list-personal"></ul>
@@ -558,6 +549,7 @@
             <div class="task-head realestate">▸ Real Estate</div>
             <div class="additem">
               <input id="in-realestate" placeholder="Add real estate task..." />
+              <input id="in-realestate-due" type="date" style="width:130px;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:8px;color:var(--text-dim);padding:8px 6px;font-size:12px" title="Due date (optional)" />
               <button data-add="realestate">+</button>
             </div>
             <ul class="list" id="list-realestate"></ul>
@@ -663,15 +655,16 @@
   </div>
 </div>
 
-<!-- Money modal -->
-<div class="modal-bg" id="moneyModal">
+<!-- Due-date modal -->
+<div class="modal-bg" id="dueModal">
   <div class="modal">
-    <h3 id="money-modal-title">◈ UPDATE NET WORTH</h3>
-    <label>Amount (USD)</label>
-    <input id="money-val" type="number" inputmode="decimal" placeholder="e.g. 25000" />
+    <h3>◈ SET DUE DATE</h3>
+    <label>Due date</label>
+    <input id="due-date" type="date" />
     <div class="modal-actions">
-      <button class="btn-cancel" id="money-cancel">Cancel</button>
-      <button class="btn-go" id="money-save">Save</button>
+      <button class="btn-cancel" id="due-cancel">Cancel</button>
+      <button class="btn-go" id="due-save">Set Date</button>
+      <button class="btn-cancel" id="due-clear" style="color:var(--red)">Clear</button>
     </div>
   </div>
 </div>
@@ -833,7 +826,6 @@ function rerenderAll(){
   renderSchedule();
   ['daily','matrix','personal','realestate'].forEach(renderList);
   renderSuggestions();
-  renderMoney();
   renderGoalTabs(); renderGoals();
   renderDayTabs(); renderSplit();
   renderVision();
@@ -941,55 +933,48 @@ function renderList(key){
   if(!arr.length){ ul.innerHTML='<div class="empty">No tasks yet — add one above.</div>'; return; }
   arr.forEach((item,i)=>{
     const li=document.createElement('li'); if(item.c)li.classList.add('checked');
-    li.innerHTML=`<span class="cb ${item.c?'on':''}">${item.c?'✓':''}</span><span class="txt">${esc(item.t)}</span><span class="del">×</span>`;
+    li.innerHTML=`<span class="cb ${item.c?'on':''}">${item.c?'✓':''}</span><span class="txt">${esc(item.t)}</span>${dueBadge(item)}<span class="del">×</span>`;
     li.querySelector('.cb').onclick=()=>{item.c=!item.c;save();renderList(key);};
+    const badge=li.querySelector('.due');
+    if(badge) badge.onclick=()=>openDueModal(item.due,(d)=>{item.due=d;save();renderList(key);});
+    if(!badge && key!=='daily'){
+      // add clickable area to set due date on tasks without one
+      const txt=li.querySelector('.txt');
+      txt.style.cursor='pointer';
+      txt.title='Click to set due date';
+      txt.ondblclick=()=>openDueModal(item.due,(d)=>{item.due=d;save();renderList(key);});
+    }
     li.querySelector('.del').onclick=()=>{arr.splice(i,1);save();renderList(key);};
     ul.appendChild(li);
   });
 }
 function addToList(key){
   const inp=document.getElementById('in-'+key); const v=inp.value.trim(); if(!v)return;
-  DB.lists[key].push({t:v,c:false}); inp.value=''; save(); renderList(key);
+  const dueInp=document.getElementById('in-'+key+'-due');
+  const due=dueInp?dueInp.value:'';
+  DB.lists[key].push({t:v,c:false,due:due||undefined}); inp.value=''; if(dueInp)dueInp.value=''; save(); renderList(key);
 }
 
-/* ===================== CAPITAL / MONEY ===================== */
-const MONEY_TILES=[
-  {key:'netWorth',    label:'Net Worth',           color:'#ffd47a'},
-  {key:'investments', label:'Investments · Fidelity', color:'#7fe3ff'},
-  {key:'cash',        label:'Cash / Savings',       color:'#39ff8a'},
-  {key:'revenue',     label:'Matrix Revenue · MTD', color:'#ff9d5c'},
-];
-function fmtMoney(v){ if(v===''||v==null||isNaN(Number(v))) return '—'; return '$'+Number(v).toLocaleString(); }
-function renderMoney(){
-  const g=document.getElementById('moneyGrid'); if(!g)return; g.innerHTML='';
-  const m=DB.money||{};
-  MONEY_TILES.forEach(t=>{
-    const tile=document.createElement('div'); tile.className='money-tile';
-    tile.innerHTML=`<div class="money-label">${t.label}</div><div class="money-val" style="color:${t.color}">${fmtMoney(m[t.key])}</div><div class="money-edit">✎ tap to update</div>`;
-    tile.onclick=()=>openMoneyModal(t.key,t.label);
-    g.appendChild(tile);
-  });
-  const u=document.getElementById('moneyUpdated');
-  if(u) u.textContent = (m.updated)? ('UPDATED '+m.updated) : 'TAP A TILE TO UPDATE';
+/* ===================== DUE DATE HELPERS ===================== */
+function dueBadge(item){
+  if(!item.due) return '';
+  const today=new Date(); today.setHours(0,0,0,0);
+  const d=new Date(item.due+'T00:00:00');
+  const diff=Math.round((d-today)/86400000);
+  let cls='due';
+  if(diff<0) cls='due overdue';
+  else if(diff<=2) cls='due soon';
+  const label = diff===0?'Today':diff===1?'Tomorrow':diff===-1?'Yesterday':
+    d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+  return `<span class="${cls}" title="Due: ${item.due}">${esc(label)}</span>`;
 }
-let editingMoney=null;
-function openMoneyModal(key,label){
-  editingMoney=key;
-  document.getElementById('money-modal-title').textContent='◈ UPDATE '+label.toUpperCase();
-  const cur=(DB.money||{})[key];
-  document.getElementById('money-val').value=(cur===''||cur==null)?'':cur;
-  document.getElementById('moneyModal').classList.add('show');
-  document.getElementById('money-val').focus();
+let dueCallback=null;
+function openDueModal(currentDue,cb){
+  dueCallback=cb;
+  document.getElementById('due-date').value=currentDue||'';
+  document.getElementById('dueModal').classList.add('show');
 }
-function closeMoneyModal(){editingMoney=null;document.getElementById('moneyModal').classList.remove('show');}
-function saveMoney(){
-  if(!editingMoney)return;
-  if(!DB.money) DB.money={};
-  const raw=document.getElementById('money-val').value.trim();
-  DB.money[editingMoney]= raw===''?'':Number(raw);
-  DB.money.updated=new Date().toLocaleDateString(undefined,{month:'short',day:'numeric'});
-  save(); renderMoney(); closeMoneyModal();
-}
+function closeDueModal(){dueCallback=null;document.getElementById('dueModal').classList.remove('show');}
 
 /* ===================== SUGGESTED MISSIONS ===================== */
 const SUGG_RAW=[
@@ -1235,7 +1220,6 @@ function init(){
   renderSchedule();
   ['daily','matrix','personal','realestate'].forEach(renderList);
   renderSuggestions();
-  renderMoney();
   renderGoalTabs(); renderGoals();
   renderDayTabs(); renderSplit();
   renderVision();
@@ -1260,11 +1244,18 @@ function init(){
   document.getElementById('sec-save').onclick=saveSection;
   document.getElementById('sec-name').addEventListener('keydown',e=>{if(e.key==='Enter')saveSection();});
 
-  // money modal
-  document.getElementById('money-cancel').onclick=closeMoneyModal;
-  document.getElementById('moneyModal').addEventListener('click',e=>{if(e.target.id==='moneyModal')closeMoneyModal();});
-  document.getElementById('money-save').onclick=saveMoney;
-  document.getElementById('money-val').addEventListener('keydown',e=>{if(e.key==='Enter')saveMoney();});
+  // due-date modal
+  document.getElementById('due-cancel').onclick=closeDueModal;
+  document.getElementById('dueModal').addEventListener('click',e=>{if(e.target.id==='dueModal')closeDueModal();});
+  document.getElementById('due-save').onclick=()=>{
+    const d=document.getElementById('due-date').value;
+    if(dueCallback) dueCallback(d||undefined);
+    closeDueModal();
+  };
+  document.getElementById('due-clear').onclick=()=>{
+    if(dueCallback) dueCallback(undefined);
+    closeDueModal();
+  };
 
   // vision modal
   document.getElementById('v-cancel').onclick=closeVisionModal;
