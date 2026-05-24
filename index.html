@@ -1072,31 +1072,9 @@ function renderSuggestions(){
     card.querySelector('.sugg-skip').onclick=()=>{ DB.sugg.done.push(s.id); save(); renderSuggestions(); };
     el.appendChild(card);
   });
-  // "Learn today" card — prefer routine data, fall back to built-in rotation
-  const LEARN_ROTATION=[
-    {title:'How to Scale a Service Business Past $30k/mo',note:'Systemize operations, hire right, and build recurring revenue.',url:'https://www.youtube.com/watch?v=oqxOC0aGXvQ'},
-    {title:'Google LSA Ads — Advanced Optimization',note:'Get more leads for less by tuning your Local Services Ads.',url:'https://www.youtube.com/watch?v=P2-FrMkfbJI'},
-    {title:'The Psychology of Pricing Services',note:'Why premium pricing attracts better clients and higher margins.',url:'https://www.youtube.com/watch?v=OSTPBZGXR1A'},
-    {title:'How to Build SOPs That Actually Get Followed',note:'Document processes so employees execute without you.',url:'https://www.youtube.com/watch?v=xLJSGx9-SIE'},
-    {title:'Real Estate Investing for Beginners — Where to Start',note:'Understand deal analysis, financing, and your first property.',url:'https://www.youtube.com/watch?v=WFHkLFk8pDo'},
-    {title:'Body Recomposition — Cut Fat, Keep Muscle',note:'Nutrition and training strategies for getting lean without losing size.',url:'https://www.youtube.com/watch?v=M4K0s792wAU'},
-    {title:'How to Get 5-Star Reviews on Google Business Profile',note:'Turn happy clients into a review machine that drives organic leads.',url:'https://www.youtube.com/watch?v=RfNBSIMbKjM'},
-    {title:'Fleet & Dealership Detailing Contracts — How to Land Them',note:'B2B sales strategies for recurring auto detailing revenue.',url:'https://www.youtube.com/watch?v=8RI1yeuMd_c'},
-    {title:'Building a Personal Brand as a Young Entrepreneur',note:'Stand out, build trust, and attract opportunities in your market.',url:'https://www.youtube.com/watch?v=FTCuqRhjh2M'},
-    {title:'Financial Literacy — Assets vs Liabilities',note:'Think like an investor and make your money compound.',url:'https://www.youtube.com/watch?v=6TLbMGLHFwE'},
-    {title:'Ceramic Coating Business — Maximizing Profit Per Job',note:'Pricing, upsells, and workflow to make high-ticket detailing work.',url:'https://www.youtube.com/watch?v=b1tSJQzoeOk'},
-    {title:'Time Management for Entrepreneurs Who Do Everything',note:'Prioritize ruthlessly when you run a business and go to school.',url:'https://www.youtube.com/watch?v=iONDebHX9qk'},
-    {title:'Cold Outreach That Actually Works for Local Businesses',note:'How to DM, call, and email prospects without being annoying.',url:'https://www.youtube.com/watch?v=nL5DFnMf-hE'},
-    {title:'Negotiation Skills — Get What You Want',note:'Frameworks from FBI negotiators applied to business and life.',url:'https://www.youtube.com/watch?v=MjhDkNmtjy0'},
-  ];
-  let learnData=null;
+  // "Learn today" card — only from AI routine
   if(DB.aiSugg && DB.aiSugg.date===todayStr() && DB.aiSugg.learn && DB.aiSugg.learn.title){
-    learnData=DB.aiSugg.learn;
-  } else {
-    learnData=LEARN_ROTATION[dayOfYear()%LEARN_ROTATION.length];
-  }
-  if(learnData){
-    const L=learnData;
+    const L=DB.aiSugg.learn;
     const lc=document.createElement('div'); lc.className='learn-card';
     lc.innerHTML=`<div class="learn-tag">▶ LEARN TODAY</div><div class="learn-title">${esc(L.title)}</div>${L.note?`<div class="learn-note">${esc(L.note)}</div>`:''}`+
       (L.url?`<a class="learn-watch" href="${esc(L.url)}" target="_blank" rel="noopener">Watch ▶</a>`:'');
