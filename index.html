@@ -198,6 +198,21 @@
     color:#ff6b6b;border:1px solid rgba(255,77,77,.5);border-radius:7px;padding:6px 12px;transition:.15s}
   .learn-watch:hover{background:#ff6b6b;color:#0a0a0a}
 
+  /* ===== Email cards ===== */
+  .email-list{display:flex;flex-direction:column;gap:8px}
+  .email-card{border:1px solid var(--line);border-radius:10px;padding:11px 13px;
+    background:rgba(255,255,255,.02);display:flex;flex-direction:column;gap:5px;border-left:3px solid var(--cyan)}
+  .email-card.matrix{border-left-color:#7fe3ff}
+  .email-card.personal{border-left-color:var(--gold-bright)}
+  .email-card.realestate{border-left-color:#a99bff}
+  .email-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .email-from{font-size:12px;font-weight:600;color:#fff;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .email-time{font-size:10px;font-family:'Consolas',monospace;color:var(--text-dim);flex:0 0 auto}
+  .email-subj{font-size:13px;color:var(--cyan-bright);line-height:1.3}
+  .email-preview{font-size:12px;color:var(--text-dim);line-height:1.35}
+  .email-why{font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:700;color:var(--gold-bright);margin-top:2px}
+  .email-note{font-size:11px;color:var(--text-dim);font-style:italic;margin-top:8px}
+
   /* ===== Nutrition ===== */
   .nutri{display:flex;flex-direction:column;gap:14px}
   .macro{}
@@ -558,6 +573,14 @@
       </div>
     </div>
 
+    <!-- IMPORTANT EMAILS -->
+    <div class="col-12">
+      <div class="panel">
+        <h2><span class="icn">✉</span> Important Emails <span class="tag" id="emailTag">REFRESHES 6 AM</span></h2>
+        <div class="email-list" id="emailList"></div>
+      </div>
+    </div>
+
     <!-- GOALS -->
     <div class="col-12">
       <div class="panel">
@@ -826,6 +849,7 @@ function rerenderAll(){
   renderSchedule();
   ['daily','matrix','personal','realestate'].forEach(renderList);
   renderSuggestions();
+  renderEmails();
   renderGoalTabs(); renderGoals();
   renderDayTabs(); renderSplit();
   renderVision();
@@ -1064,6 +1088,32 @@ function renderSuggestions(){
   }
 }
 
+/* ===================== IMPORTANT EMAILS ===================== */
+function renderEmails(){
+  const el=document.getElementById('emailList'); if(!el) return; el.innerHTML='';
+  const tag=document.getElementById('emailTag');
+  const ai=DB.aiEmails;
+  if(!ai || ai.date!==todayStr() || !Array.isArray(ai.emails) || !ai.emails.length){
+    el.innerHTML='<div class="empty">No priority emails today. Refreshes each morning at 6 AM.</div>';
+    if(tag) tag.textContent='REFRESHES 6 AM';
+    return;
+  }
+  if(tag) tag.textContent='TODAY · '+ai.emails.length+' FLAGGED';
+  ai.emails.forEach(em=>{
+    const card=document.createElement('div');
+    card.className='email-card'+(em.label?' '+em.label:'');
+    card.innerHTML=
+      `<div class="email-top"><span class="email-from">${esc(em.from)}</span><span class="email-time">${esc(em.time||'')}</span></div>`+
+      `<div class="email-subj">${esc(em.subject)}</div>`+
+      `<div class="email-preview">${esc(em.preview)}</div>`+
+      (em.why?`<div class="email-why">→ ${esc(em.why)}</div>`:'');
+    el.appendChild(card);
+  });
+  const note=document.createElement('div'); note.className='email-note';
+  note.textContent='Scanned by J.A.R.V.I.S. at 6 AM — open Gmail to respond.';
+  el.appendChild(note);
+}
+
 /* ===================== GOALS (editable sections) ===================== */
 let curGoalId=(DB.goals[0]||{}).id||null;
 function curSection(){ return DB.goals.find(s=>s.id===curGoalId)||null; }
@@ -1220,6 +1270,7 @@ function init(){
   renderSchedule();
   ['daily','matrix','personal','realestate'].forEach(renderList);
   renderSuggestions();
+  renderEmails();
   renderGoalTabs(); renderGoals();
   renderDayTabs(); renderSplit();
   renderVision();
