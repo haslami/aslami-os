@@ -1027,30 +1027,26 @@ const SUGG_RAW=[
   {cat:'Real Estate', list:'realestate', text:'Pick one target ZIP and pull 10 recent comps to learn that market cold.'},
   {cat:'Real Estate', list:'realestate', text:'List the first 3 concrete steps to fund or finance deal #1.'},
   {cat:'Real Estate', list:'realestate', text:'Find and follow 3 local investors or agents who are already winning, and study their moves.'},
-  // — Growth / Money —
-  {cat:'Growth', list:'personal', text:'Move this week’s Matrix profit toward the Transit Connect fund and log the new balance.'},
-  {cat:'Growth', list:'personal', text:'Set a specific revenue target for this month and put it on the board.'},
-  {cat:'Growth', list:'personal', text:'Spend 30 minutes documenting one SOP you currently keep only in your head.'},
-  {cat:'Growth', list:'personal', text:'Review your $20k → $30k revenue ladder and pick the single lever to pull this week.'},
-  // — Fitness —
-  {cat:'Fitness', list:'personal', text:'Lock today’s protein at ~180g and prep a high-protein meal in advance.'},
-  {cat:'Fitness', list:'personal', text:'Add one progressive-overload set to your main lift on today’s split.'},
-  {cat:'Fitness', list:'personal', text:'Be in bed by 11 to protect recovery during the cut (hold above 170 lbs).'},
-  {cat:'Fitness', list:'personal', text:'Track morning weight + waist to monitor the cut toward ~8% body fat.'},
   // — Personal / lifestyle —
+  {cat:’Personal’, list:’personal’, text:’Move this week’s Matrix profit toward the Transit Connect fund and log the new balance.’},
+  {cat:’Personal’, list:’personal’, text:’Set a specific revenue target for this month and put it on the board.’},
+  {cat:’Personal’, list:’personal’, text:’Spend 30 minutes documenting one SOP you currently keep only in your head.’},
+  {cat:’Personal’, list:’personal’, text:’Review your $20k → $30k revenue ladder and pick the single lever to pull this week.’},
   {cat:'Personal', list:'personal', text:'Define one concrete deliverable for today’s 3–7pm real estate block.'},
   {cat:'Personal', list:'personal', text:'Pick one skill to study for 20 minutes that compounds across your businesses.'},
   {cat:'Personal', list:'personal', text:'Write tomorrow’s top 3 missions tonight so you wake up with a plan.'},
   {cat:'Personal', list:'personal', text:'Message one mentor or peer who’s ahead of you and ask a single sharp question.'},
 ];
 const SUGGESTIONS=SUGG_RAW.map((s,i)=>({...s,id:i}));
-const SUGG_COLORS={Matrix:'#7fe3ff','Real Estate':'#a99bff',Growth:'#39ff8a',Fitness:'#ff9d5c',Personal:'#ffd47a'};
+const SUGG_COLORS={matrix:'#7fe3ff',Matrix:'#7fe3ff','Real Estate':'#a99bff',realestate:'#a99bff',Growth:'#39ff8a',Personal:'#ffd47a',personal:'#ffd47a'};
 function ensureSugg(){ if(!DB.sugg||DB.sugg.day!==todayStr()) DB.sugg={day:todayStr(),bump:0,done:[]}; }
 function visibleSuggestions(){
   ensureSugg();
-  const start=((dayOfYear()+DB.sugg.bump)*3)%SUGGESTIONS.length;
-  const rot=SUGGESTIONS.slice(start).concat(SUGGESTIONS.slice(0,start));
-  return rot.filter(s=>!DB.sugg.done.includes(s.id)).slice(0,3);
+  const seed=dayOfYear()+DB.sugg.bump;
+  const byCat={};
+  SUGGESTIONS.forEach(s=>{ const c=s.cat; if(!byCat[c]) byCat[c]=[]; byCat[c].push(s); });
+  const pick=(arr,n)=>{ const out=[]; const filt=arr.filter(s=>!DB.sugg.done.includes(s.id)); for(let i=0;i<n&&filt.length;i++){ out.push(filt.splice((seed+i)%filt.length,1)[0]); } return out; };
+  return [].concat(pick(byCat['Matrix']||[],2), pick(byCat['Real Estate']||[],1), pick(byCat['Personal']||byCat['Growth']||[],1));
 }
 function renderSuggestions(){
   const el=document.getElementById('suggList'); if(!el) return; el.innerHTML='';
