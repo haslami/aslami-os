@@ -10,9 +10,15 @@
   "theme_color": "#05080f",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='31' fill='%2303060c'/%3E%3Cg fill='none' stroke='%2339c2ff' stroke-width='2'%3E%3Ccircle cx='32' cy='32' r='27'/%3E%3Ccircle cx='32' cy='32' r='13'/%3E%3C/g%3E%3Cg stroke='%237fe3ff' stroke-width='3' stroke-linecap='round'%3E%3Cline x1='32' y1='7' x2='32' y2='19'/%3E%3Cline x1='32' y1='57' x2='32' y2='45'/%3E%3Cline x1='7' y1='32' x2='19' y2='32'/%3E%3Cline x1='57' y1='32' x2='45' y2='32'/%3E%3Cline x1='15' y1='15' x2='23' y2='23'/%3E%3Cline x1='49' y1='49' x2='41' y2='41'/%3E%3Cline x1='49' y1='15' x2='41' y2='23'/%3E%3Cline x1='15' y1='49' x2='23' y2='41'/%3E%3C/g%3E%3Ccircle cx='32' cy='32' r='9' fill='%23eafaff'/%3E%3C/svg%3E",
+      "src": "jarvis-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]
