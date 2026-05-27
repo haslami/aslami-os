@@ -718,7 +718,7 @@ const DEFAULTS = {
   lists: {
     daily: [],
     matrix: [
-      {t:’Define this week\’s Matrix milestone’, c:false},
+      {t:'Define this week\'s Matrix milestone', c:false},
     ],
     personal: [],
     realestate: [
@@ -726,7 +726,7 @@ const DEFAULTS = {
     ],
   },
   goals: [
-    {id:’overall’,    label:’Overall’,     short:[{t:’Win the day, every day’,c:false}], long:[{t:’Become the man I\’m meant to be’,c:false}]},
+    {id:'overall',    label:'Overall',     short:[{t:'Win the day, every day',c:false}], long:[{t:'Become the man I\'m meant to be',c:false}]},
     {id:'matrix',     label:'Matrix',      short:[{t:'Ship next feature / deliverable',c:false}], long:[{t:'Make Matrix a market leader',c:false}]},
     {id:'realestate', label:'Real Estate', short:[{t:'Close first deal',c:false}], long:[{t:'Build a portfolio of properties',c:false}]},
     {id:'gym',        label:'Gym',         short:[{t:'Hit gym 6x this week',c:false}], long:[{t:'Reach dream physique',c:false}]},
@@ -1006,14 +1006,14 @@ const SUGG_RAW=[
   {cat:'Matrix', list:'matrix', text:'Call your 5 highest-value members and offer a ceramic-coating upgrade slot this month.'},
   {cat:'Matrix', list:'matrix', text:'Add a ceramic-coating upsell step to your GoHighLevel booking flow.'},
   {cat:'Matrix', list:'matrix', text:'Audit the last 30 days of Google LSA spend and pause the lowest-converting service area.'},
-  {cat:’Matrix’, list:’matrix’, text:’Trigger an automated review-request text to this week\’s clients to grow your GBP rating.’},
+  {cat:'Matrix', list:'matrix', text:'Trigger an automated review-request text to this week\'s clients to grow your GBP rating.'},
   {cat:'Matrix', list:'matrix', text:'Finalize the Ford Transit Connect buildout checklist: water tank, power, and shelving.'},
   {cat:'Matrix', list:'matrix', text:'Draft the job post and 25% commission + tip-share offer for the 2nd-van technician.'},
   {cat:'Matrix', list:'matrix', text:'Package a premium "ceramic + interior protection" tier for your high-ticket Saturdays.'},
   {cat:'Matrix', list:'matrix', text:'Launch a referral incentive (free interior detail for 3 referrals) and announce it to clients.'},
   {cat:'Matrix', list:'matrix', text:'Open your finance sheet and calculate true profit-per-car after chemicals and labor.'},
-  {cat:’Matrix’, list:’matrix’, text:’Set up a 90-day win-back text for clients who haven\’t rebooked.’},
-  {cat:’Matrix’, list:’matrix’, text:’Map next week\’s bookings by ZIP to tighten route density and cut drive time.’},
+  {cat:'Matrix', list:'matrix', text:'Set up a 90-day win-back text for clients who haven\'t rebooked.'},
+  {cat:'Matrix', list:'matrix', text:'Map next week\'s bookings by ZIP to tighten route density and cut drive time.'},
   {cat:'Matrix', list:'matrix', text:'Build a monthly maintenance membership and pitch it to 10 existing clients.'},
   {cat:'Matrix', list:'matrix', text:'Restock the 5-gal pre-dilute chemical station and confirm the SOP is current.'},
   {cat:'Matrix', list:'matrix', text:'Record a 60-second ceramic-coating before/after video for your GBP and ads.'},
@@ -1028,14 +1028,14 @@ const SUGG_RAW=[
   {cat:'Real Estate', list:'realestate', text:'List the first 3 concrete steps to fund or finance deal #1.'},
   {cat:'Real Estate', list:'realestate', text:'Find and follow 3 local investors or agents who are already winning, and study their moves.'},
   // — Personal / lifestyle —
-  {cat:’Personal’, list:’personal’, text:’Move this week\’s Matrix profit toward the Transit Connect fund and log the new balance.’},
-  {cat:’Personal’, list:’personal’, text:’Set a specific revenue target for this month and put it on the board.’},
-  {cat:’Personal’, list:’personal’, text:’Spend 30 minutes documenting one SOP you currently keep only in your head.’},
-  {cat:’Personal’, list:’personal’, text:’Review your $20k → $30k revenue ladder and pick the single lever to pull this week.’},
-  {cat:’Personal’, list:’personal’, text:’Define one concrete deliverable for today\’s 3-7pm real estate block.’},
+  {cat:'Personal', list:'personal', text:'Move this week\'s Matrix profit toward the Transit Connect fund and log the new balance.'},
+  {cat:'Personal', list:'personal', text:'Set a specific revenue target for this month and put it on the board.'},
+  {cat:'Personal', list:'personal', text:'Spend 30 minutes documenting one SOP you currently keep only in your head.'},
+  {cat:'Personal', list:'personal', text:'Review your $20k → $30k revenue ladder and pick the single lever to pull this week.'},
+  {cat:'Personal', list:'personal', text:'Define one concrete deliverable for today\'s 3-7pm real estate block.'},
   {cat:'Personal', list:'personal', text:'Pick one skill to study for 20 minutes that compounds across your businesses.'},
-  {cat:’Personal’, list:’personal’, text:’Write tomorrow\’s top 3 missions tonight so you wake up with a plan.’},
-  {cat:’Personal’, list:’personal’, text:’Message one mentor or peer who\’s ahead of you and ask a single sharp question.’},
+  {cat:'Personal', list:'personal', text:'Write tomorrow\'s top 3 missions tonight so you wake up with a plan.'},
+  {cat:'Personal', list:'personal', text:'Message one mentor or peer who\'s ahead of you and ask a single sharp question.'},
 ];
 const SUGGESTIONS=SUGG_RAW.map((s,i)=>({...s,id:i}));
 const SUGG_COLORS={matrix:'#7fe3ff',Matrix:'#7fe3ff','Real Estate':'#a99bff',realestate:'#a99bff',Growth:'#39ff8a',Personal:'#ffd47a',personal:'#ffd47a'};
@@ -1335,7 +1335,7 @@ function init(){
 
   // reset today
   document.getElementById('resetDay').onclick=()=>{
-    if(confirm(‘Reset today\’s daily mission list?’)){
+    if(confirm('Reset today\'s daily mission list?')){
       DB.lists.daily=[];
       save(); init();
     }
