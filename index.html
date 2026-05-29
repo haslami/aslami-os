@@ -213,6 +213,29 @@
   .email-why{font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:700;color:var(--gold-bright);margin-top:2px}
   .email-note{font-size:11px;color:var(--text-dim);font-style:italic;margin-top:8px}
 
+  /* ===== Matrix Leads (GHL) ===== */
+  .ghl-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  @media(max-width:600px){.ghl-grid{grid-template-columns:repeat(2,1fr)}}
+  .ghl-stat{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:rgba(127,227,255,.03);
+    display:flex;flex-direction:column;gap:4px;border-top:2px solid #7fe3ff}
+  .ghl-stat .ghl-label{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;color:var(--text-dim)}
+  .ghl-stat .ghl-row{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+  .ghl-stat .ghl-num{font-size:22px;font-weight:700;color:#7fe3ff;font-family:'Consolas',monospace}
+  .ghl-stat .ghl-sub{font-size:10px;color:var(--text-dim);letter-spacing:.5px}
+  .ghl-stat .ghl-book{font-size:15px;font-weight:600;color:var(--gold-bright);font-family:'Consolas',monospace}
+  .ghl-vs{grid-column:span 4;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:600px){.ghl-vs{grid-column:span 2}}
+  .ghl-vs-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:rgba(127,227,255,.03);
+    display:flex;flex-direction:column;gap:6px}
+  .ghl-vs-card .ghl-label{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;color:var(--text-dim)}
+  .ghl-vs-card .ghl-vs-row{display:flex;justify-content:space-between;align-items:baseline}
+  .ghl-vs-card .ghl-num{font-size:20px;font-weight:700;color:#7fe3ff;font-family:'Consolas',monospace}
+  .ghl-vs-card .ghl-book{font-size:14px;font-weight:600;color:var(--gold-bright);font-family:'Consolas',monospace}
+  .ghl-delta{font-size:10px;font-weight:700;letter-spacing:.5px}
+  .ghl-delta.up{color:#39ff8a}
+  .ghl-delta.down{color:#ff6b6b}
+  .ghl-delta.flat{color:var(--text-dim)}
+
   /* ===== Nutrition ===== */
   .nutri{display:flex;flex-direction:column;gap:14px}
   .macro{}
@@ -573,6 +596,14 @@
       </div>
     </div>
 
+    <!-- MATRIX LEADS (GHL) -->
+    <div class="col-12">
+      <div class="panel">
+        <h2><span class="icn">📊</span> Matrix Leads <span class="tag" id="ghlTag">REFRESHES 6 AM</span></h2>
+        <div class="ghl-grid" id="ghlGrid"></div>
+      </div>
+    </div>
+
     <!-- IMPORTANT EMAILS -->
     <div class="col-12">
       <div class="panel">
@@ -850,6 +881,7 @@ function rerenderAll(){
   ['daily','matrix','personal','realestate'].forEach(renderList);
   renderSuggestions();
   renderEmails();
+  renderGHL();
   renderGoalTabs(); renderGoals();
   renderDayTabs(); renderSplit();
   renderVision();
@@ -1110,6 +1142,33 @@ function renderEmails(){
   el.appendChild(note);
 }
 
+/* ===================== MATRIX LEADS (GHL) ===================== */
+function renderGHL(){
+  const el=document.getElementById('ghlGrid'); if(!el) return; el.innerHTML='';
+  const tag=document.getElementById('ghlTag');
+  const g=DB.ghlStats;
+  if(!g || !g.date){
+    el.innerHTML='<div class="empty">No lead data yet. Refreshes each morning at 6 AM.</div>';
+    if(tag) tag.textContent='REFRESHES 6 AM';
+    return;
+  }
+  if(tag) tag.textContent='UPDATED '+g.date;
+  const stat=(label,leads,bookings)=>`<div class="ghl-stat"><div class="ghl-label">${label}</div><div class="ghl-row"><div><div class="ghl-num">${leads}</div><div class="ghl-sub">LEADS</div></div><div><div class="ghl-book">${bookings}</div><div class="ghl-sub">BOOKINGS</div></div></div></div>`;
+  el.innerHTML=stat('LAST 24 HOURS',g.leads24h||0,g.bookings24h||0)+
+    stat('LAST 7 DAYS',g.leads7d||0,g.bookings7d||0)+
+    stat('LAST 14 DAYS',g.leads14d||0,g.bookings14d||0)+
+    stat('LAST 30 DAYS',g.leads30d||0,g.bookings30d||0);
+  // Month vs month comparison
+  const lDelta=((g.leadsThisMonth||0)-(g.leadsLastMonth||0));
+  const bDelta=((g.bookingsThisMonth||0)-(g.bookingsLastMonth||0));
+  const dc=(v)=>v>0?'up':v<0?'down':'flat';
+  const ds=(v)=>v>0?'+'+v:v===0?'—':''+v;
+  el.innerHTML+=`<div class="ghl-vs">`+
+    `<div class="ghl-vs-card"><div class="ghl-label">THIS MONTH</div><div class="ghl-vs-row"><div><div class="ghl-num">${g.leadsThisMonth||0}</div><div class="ghl-sub">LEADS</div></div><div><div class="ghl-book">${g.bookingsThisMonth||0}</div><div class="ghl-sub">BOOKINGS</div></div></div><div class="ghl-delta ${dc(lDelta)}">${ds(lDelta)} leads vs last month</div></div>`+
+    `<div class="ghl-vs-card"><div class="ghl-label">LAST MONTH</div><div class="ghl-vs-row"><div><div class="ghl-num">${g.leadsLastMonth||0}</div><div class="ghl-sub">LEADS</div></div><div><div class="ghl-book">${g.bookingsLastMonth||0}</div><div class="ghl-sub">BOOKINGS</div></div></div></div>`+
+    `</div>`;
+}
+
 /* ===================== GOALS (editable sections) ===================== */
 let curGoalId=(DB.goals[0]||{}).id||null;
 function curSection(){ return DB.goals.find(s=>s.id===curGoalId)||null; }
@@ -1267,6 +1326,7 @@ function init(){
   ['daily','matrix','personal','realestate'].forEach(renderList);
   renderSuggestions();
   renderEmails();
+  renderGHL();
   renderGoalTabs(); renderGoals();
   renderDayTabs(); renderSplit();
   renderVision();
