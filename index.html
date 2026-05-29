@@ -198,19 +198,42 @@
     color:#ff6b6b;border:1px solid rgba(255,77,77,.5);border-radius:7px;padding:6px 12px;transition:.15s}
   .learn-watch:hover{background:#ff6b6b;color:#0a0a0a}
 
-  /* ===== Email cards ===== */
+  /* ===== Weather widget ===== */
+  .weather-bar{display:flex;gap:12px;align-items:stretch;margin-bottom:10px}
+  .weather-day{flex:1;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:rgba(127,227,255,.03);
+    display:flex;align-items:center;gap:12px}
+  .weather-day .wx-icon{font-size:32px;line-height:1}
+  .weather-day .wx-info{flex:1;display:flex;flex-direction:column;gap:2px}
+  .weather-day .wx-label{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;color:var(--text-dim)}
+  .weather-day .wx-temp{font-size:22px;font-weight:700;color:#7fe3ff;font-family:'Consolas',monospace}
+  .weather-day .wx-desc{font-size:11px;color:var(--text-dim);text-transform:capitalize}
+  .weather-day .wx-hilo{font-size:11px;color:var(--text-dim);font-family:'Consolas',monospace}
+  .weather-day .wx-hilo .wx-hi{color:#ff9f43}
+  .weather-day .wx-hilo .wx-lo{color:#7fe3ff}
+
+  /* ===== Email / Inbox Summary ===== */
   .email-list{display:flex;flex-direction:column;gap:8px}
+  .inbox-section-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-weight:700;
+    color:var(--gold-bright);margin:10px 0 4px;padding-bottom:4px;border-bottom:1px solid rgba(255,215,0,.15)}
+  .inbox-section-label:first-child{margin-top:0}
+  .inbox-section-label.general{color:var(--cyan)}
   .email-card{border:1px solid var(--line);border-radius:10px;padding:11px 13px;
     background:rgba(255,255,255,.02);display:flex;flex-direction:column;gap:5px;border-left:3px solid var(--cyan)}
   .email-card.matrix{border-left-color:#7fe3ff}
   .email-card.personal{border-left-color:var(--gold-bright)}
   .email-card.realestate{border-left-color:#a99bff}
+  .email-card.urgent{border-left-color:#ff6b6b;background:rgba(255,107,107,.04)}
   .email-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
   .email-from{font-size:12px;font-weight:600;color:#fff;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .email-time{font-size:10px;font-family:'Consolas',monospace;color:var(--text-dim);flex:0 0 auto}
   .email-subj{font-size:13px;color:var(--cyan-bright);line-height:1.3}
   .email-preview{font-size:12px;color:var(--text-dim);line-height:1.35}
   .email-why{font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:700;color:var(--gold-bright);margin-top:2px}
+  .email-priority{display:inline-block;font-size:9px;letter-spacing:.8px;text-transform:uppercase;font-weight:700;
+    padding:2px 6px;border-radius:4px;margin-right:6px}
+  .email-priority.high{background:rgba(255,107,107,.2);color:#ff6b6b}
+  .email-priority.medium{background:rgba(255,159,67,.15);color:#ff9f43}
+  .email-priority.low{background:rgba(127,227,255,.1);color:#7fe3ff}
   .email-note{font-size:11px;color:var(--text-dim);font-style:italic;margin-top:8px}
 
   /* ===== Matrix Leads (GHL) ===== */
@@ -515,6 +538,28 @@
     </div>
   </header>
 
+  <!-- WEATHER -->
+  <div class="weather-bar" id="weatherBar">
+    <div class="weather-day" id="wxToday">
+      <div class="wx-icon">--</div>
+      <div class="wx-info">
+        <div class="wx-label">TODAY</div>
+        <div class="wx-temp">--°F</div>
+        <div class="wx-desc">Loading...</div>
+        <div class="wx-hilo"><span class="wx-hi">H --°</span> / <span class="wx-lo">L --°</span></div>
+      </div>
+    </div>
+    <div class="weather-day" id="wxTomorrow">
+      <div class="wx-icon">--</div>
+      <div class="wx-info">
+        <div class="wx-label">TOMORROW</div>
+        <div class="wx-temp">--°F</div>
+        <div class="wx-desc">Loading...</div>
+        <div class="wx-hilo"><span class="wx-hi">H --°</span> / <span class="wx-lo">L --°</span></div>
+      </div>
+    </div>
+  </div>
+
   <!-- QUOTE -->
   <div class="quote" id="quoteBox">
     "Loading directive..."
@@ -604,10 +649,10 @@
       </div>
     </div>
 
-    <!-- IMPORTANT EMAILS -->
+    <!-- INBOX SUMMARY -->
     <div class="col-12">
       <div class="panel">
-        <h2><span class="icn">✉</span> Important Emails <span class="tag" id="emailTag">REFRESHES 6 AM</span></h2>
+        <h2><span class="icn">✉</span> Inbox Summary <span class="tag" id="emailTag">REFRESHES 6 AM</span></h2>
         <div class="email-list" id="emailList"></div>
       </div>
     </div>
@@ -1122,21 +1167,45 @@ function renderEmails(){
   const tag=document.getElementById('emailTag');
   const ai=DB.aiEmails;
   if(!ai || ai.date!==todayStr() || !Array.isArray(ai.emails) || !ai.emails.length){
-    el.innerHTML='<div class="empty">No priority emails today. Refreshes each morning at 6 AM.</div>';
+    el.innerHTML='<div class="empty">No emails scanned yet. Refreshes each morning at 6 AM.</div>';
     if(tag) tag.textContent='REFRESHES 6 AM';
     return;
   }
-  if(tag) tag.textContent='TODAY · '+ai.emails.length+' FLAGGED';
-  ai.emails.forEach(em=>{
+  // Split emails into action-required (high priority) and general
+  const actionRequired=ai.emails.filter(e=>(e.priority||'').toLowerCase()==='high');
+  const general=ai.emails.filter(e=>(e.priority||'').toLowerCase()!=='high');
+  const total=ai.emails.length;
+  if(tag) tag.textContent='TODAY · '+total+' SCANNED'+(actionRequired.length?' · '+actionRequired.length+' ACTION':'');
+
+  const renderCard=(em)=>{
     const card=document.createElement('div');
-    card.className='email-card'+(em.label?' '+em.label:'');
+    const cls=['email-card'];
+    if(em.label) cls.push(em.label);
+    if((em.priority||'').toLowerCase()==='high') cls.push('urgent');
+    card.className=cls.join(' ');
+    const pBadge=em.priority?`<span class="email-priority ${(em.priority||'').toLowerCase()}">${esc(em.priority)}</span>`:'';
     card.innerHTML=
-      `<div class="email-top"><span class="email-from">${esc(em.from)}</span><span class="email-time">${esc(em.time||'')}</span></div>`+
+      `<div class="email-top"><span class="email-from">${pBadge}${esc(em.from)}</span><span class="email-time">${esc(em.time||'')}</span></div>`+
       `<div class="email-subj">${esc(em.subject)}</div>`+
       `<div class="email-preview">${esc(em.preview)}</div>`+
       (em.why?`<div class="email-why">→ ${esc(em.why)}</div>`:'');
-    el.appendChild(card);
-  });
+    return card;
+  };
+
+  // Action Required section
+  if(actionRequired.length){
+    const lbl=document.createElement('div'); lbl.className='inbox-section-label';
+    lbl.textContent='ACTION REQUIRED — RESPOND TODAY';
+    el.appendChild(lbl);
+    actionRequired.forEach(em=>el.appendChild(renderCard(em)));
+  }
+  // General summary
+  if(general.length){
+    const lbl=document.createElement('div'); lbl.className='inbox-section-label general';
+    lbl.textContent=actionRequired.length?'OTHER EMAILS':'EMAIL SUMMARY';
+    el.appendChild(lbl);
+    general.forEach(em=>el.appendChild(renderCard(em)));
+  }
   const note=document.createElement('div'); note.className='email-note';
   note.textContent='Scanned by J.A.R.V.I.S. at 6 AM — open Gmail to respond.';
   el.appendChild(note);
@@ -1168,6 +1237,115 @@ function renderGHL(){
     `<div class="ghl-vs-card"><div class="ghl-label">LAST MONTH</div><div class="ghl-vs-row"><div><div class="ghl-num">${g.leadsLastMonth||0}</div><div class="ghl-sub">LEADS</div></div><div><div class="ghl-book">${g.bookingsLastMonth||0}</div><div class="ghl-sub">BOOKINGS</div></div></div></div>`+
     `</div>`;
 }
+
+/* ===================== WEATHER (Open-Meteo, free) ===================== */
+const WX_CODES={0:'☀️',1:'🌤',2:'⛅',3:'☁️',45:'🌫',48:'🌫',51:'🌦',53:'🌧',55:'🌧',
+  56:'🌨',57:'🌨',61:'🌧',63:'🌧',65:'🌧️',66:'🌨',67:'🌨',71:'🌨',73:'❄️',75:'❄️',
+  77:'❄️',80:'🌦',81:'🌧',82:'⛈',85:'🌨',86:'❄️',95:'⛈',96:'⛈',99:'⛈'};
+const WX_DESC={0:'Clear sky',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',45:'Fog',48:'Rime fog',
+  51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',61:'Light rain',63:'Rain',65:'Heavy rain',
+  71:'Light snow',73:'Snow',75:'Heavy snow',80:'Rain showers',81:'Moderate showers',82:'Heavy showers',
+  95:'Thunderstorm',96:'Thunderstorm w/ hail',99:'Severe thunderstorm'};
+
+async function fetchWeather(){
+  try{
+    // Blue Springs, MO
+    const lat=39.0169,lon=-94.2816;
+    const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=America/Chicago&forecast_days=2`);
+    const d=await r.json();
+    const cur=d.current;
+    const daily=d.daily;
+    // Today
+    const todayEl=document.getElementById('wxToday');
+    if(todayEl){
+      todayEl.querySelector('.wx-icon').textContent=WX_CODES[cur.weather_code]||'🌡';
+      todayEl.querySelector('.wx-temp').textContent=Math.round(cur.temperature_2m)+'°F';
+      todayEl.querySelector('.wx-desc').textContent=WX_DESC[cur.weather_code]||'';
+      todayEl.querySelector('.wx-hi').textContent='H '+Math.round(daily.temperature_2m_max[0])+'°';
+      todayEl.querySelector('.wx-lo').textContent='L '+Math.round(daily.temperature_2m_min[0])+'°';
+    }
+    // Tomorrow
+    if(daily.weather_code.length>1){
+      const tmEl=document.getElementById('wxTomorrow');
+      if(tmEl){
+        tmEl.querySelector('.wx-icon').textContent=WX_CODES[daily.weather_code[1]]||'🌡';
+        tmEl.querySelector('.wx-temp').textContent=Math.round((daily.temperature_2m_max[1]+daily.temperature_2m_min[1])/2)+'°F';
+        tmEl.querySelector('.wx-desc').textContent=WX_DESC[daily.weather_code[1]]||'';
+        tmEl.querySelector('.wx-hi').textContent='H '+Math.round(daily.temperature_2m_max[1])+'°';
+        tmEl.querySelector('.wx-lo').textContent='L '+Math.round(daily.temperature_2m_min[1])+'°';
+      }
+    }
+  }catch(e){console.warn('Weather fetch failed:',e);}
+}
+
+/* ===================== LIVE GHL REFRESH ===================== */
+const GHL_TOKEN='pit-e0014864-3858-49b4-848e-e2e431d9955b';
+const GHL_LOC='4oujU1ql0szJ60pb1xzk';
+const GHL_CAL='sA5qta4JYh961np0ienC';
+const GHL_BASE='https://services.leadconnectorhq.com';
+const GHL_HDR={'Authorization':'Bearer '+GHL_TOKEN,'Version':'2021-07-28'};
+
+async function fetchGHLLive(){
+  try{
+    const now=new Date();
+    const iso=d=>d.toISOString();
+    const ms=d=>d.getTime();
+    const periods=[
+      {key:'24h',start:new Date(now-864e5)},
+      {key:'7d',start:new Date(now-6048e5)},
+      {key:'14d',start:new Date(now-12096e5)},
+      {key:'30d',start:new Date(now-2592e6)}
+    ];
+    // Monthly boundaries (Central time)
+    const y=now.getFullYear(),m=now.getMonth();
+    const thisMonthStart=new Date(y,m,1);
+    const lastMonthStart=new Date(y,m-1,1);
+    const lastMonthEnd=new Date(y,m,1);
+
+    // Fetch all contacts counts in parallel
+    const contactFetches=periods.map(p=>
+      fetch(`${GHL_BASE}/contacts/?locationId=${GHL_LOC}&limit=1&startDate=${iso(p.start)}&endDate=${iso(now)}`,{headers:GHL_HDR})
+        .then(r=>r.json()).then(d=>({key:p.key,total:d.meta?.total||0}))
+    );
+    // Monthly contacts
+    const cThisMonth=fetch(`${GHL_BASE}/contacts/?locationId=${GHL_LOC}&limit=1&startDate=${iso(thisMonthStart)}&endDate=${iso(now)}`,{headers:GHL_HDR})
+      .then(r=>r.json()).then(d=>d.meta?.total||0);
+    const cLastMonth=fetch(`${GHL_BASE}/contacts/?locationId=${GHL_LOC}&limit=1&startDate=${iso(lastMonthStart)}&endDate=${iso(lastMonthEnd)}`,{headers:GHL_HDR})
+      .then(r=>r.json()).then(d=>d.meta?.total||0);
+
+    // Fetch all booking counts in parallel
+    const bookFetches=periods.map(p=>
+      fetch(`${GHL_BASE}/calendars/events?locationId=${GHL_LOC}&calendarId=${GHL_CAL}&startTime=${ms(p.start)}&endTime=${ms(now)}`,{headers:GHL_HDR})
+        .then(r=>r.json()).then(d=>({key:p.key,count:(d.events||[]).length}))
+    );
+    const bThisMonth=fetch(`${GHL_BASE}/calendars/events?locationId=${GHL_LOC}&calendarId=${GHL_CAL}&startTime=${ms(thisMonthStart)}&endTime=${ms(now)}`,{headers:GHL_HDR})
+      .then(r=>r.json()).then(d=>(d.events||[]).length);
+    const bLastMonth=fetch(`${GHL_BASE}/calendars/events?locationId=${GHL_LOC}&calendarId=${GHL_CAL}&startTime=${ms(lastMonthStart)}&endTime=${ms(lastMonthEnd)}`,{headers:GHL_HDR})
+      .then(r=>r.json()).then(d=>(d.events||[]).length);
+
+    const [contacts,bookings,cTM,cLM,bTM,bLM]=await Promise.all([
+      Promise.all(contactFetches),Promise.all(bookFetches),cThisMonth,cLastMonth,bThisMonth,bLastMonth
+    ]);
+
+    const g={date:todayStr()};
+    contacts.forEach(c=>{g['leads'+c.key]=c.total;});
+    bookings.forEach(b=>{g['bookings'+b.key]=b.count;});
+    g.leadsThisMonth=cTM; g.leadsLastMonth=cLM;
+    g.bookingsThisMonth=bTM; g.bookingsLastMonth=bLM;
+
+    DB.ghlStats=g;
+    renderGHL();
+    // Update tag to show live timestamp
+    const tag=document.getElementById('ghlTag');
+    if(tag){
+      const t=new Date();
+      const h=t.getHours(),mi=t.getMinutes();
+      tag.textContent='LIVE · '+(h>12?h-12:h||12)+':'+String(mi).padStart(2,'0')+' '+(h>=12?'PM':'AM');
+    }
+  }catch(e){console.warn('GHL live fetch failed:',e);}
+}
+// Auto-refresh GHL every 5 minutes
+setInterval(fetchGHLLive,300000);
 
 /* ===================== GOALS (editable sections) ===================== */
 let curGoalId=(DB.goals[0]||{}).id||null;
@@ -1334,6 +1512,8 @@ function init(){
   setInterval(tick,1000);
   setInterval(renderSchedule,30000);
   syncInit();
+  fetchWeather(); setInterval(fetchWeather,1800000); // refresh weather every 30 min
+  fetchGHLLive(); // initial live GHL pull (then auto every 5 min)
 
   // add buttons
   document.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>addToList(b.dataset.add));
