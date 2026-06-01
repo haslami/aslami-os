@@ -1,0 +1,14 @@
+{
+  "name": "Matrix Command Center",
+  "short_name": "Matrix",
+  "description": "Matrix Mobile Details — Command Center",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#06090c",
+  "theme_color": "#06090c",
+  "icons": [
+    { "src": "logo.png", "sizes": "320x216", "type": "image/png", "purpose": "any" },
+    { "src": "logo.png", "sizes": "320x216", "type": "image/png", "purpose": "maskable" }
+  ]
+}

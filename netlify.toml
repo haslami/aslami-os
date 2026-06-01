@@ -1,0 +1,3 @@
+[build]
+  publish = "matrixcommandcenter"
+  functions = "netlify/functions"

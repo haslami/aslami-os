@@ -1,0 +1,1871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>Matrix Command Center</title>
+<link rel="icon" type="image/png" href="logo.png" />
+<link rel="apple-touch-icon" href="logo.png" />
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#06090c" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.4/babel.min.js"></script>
+<script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    background:#06090c;color:#e8f3ec;overflow:hidden;
+    -webkit-font-smoothing:antialiased;letter-spacing:.2px;
+  }
+  #root{height:100vh;display:flex;overflow:hidden}
+
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(31,197,106,0.28);border-radius:4px}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(31,197,106,0.5)}
+
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes fadeInFast{from{opacity:0}to{opacity:1}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:none;opacity:1}}
+  @keyframes scaleIn{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
+  @keyframes glow{0%,100%{box-shadow:0 0 6px rgba(31,197,106,.3)}50%{box-shadow:0 0 18px rgba(31,197,106,.55)}}
+  @keyframes shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
+  @keyframes growBar{from{width:0}}
+
+  .fade-in{animation:fadeIn .3s ease forwards}
+  .fade-in-fast{animation:fadeInFast .2s ease forwards}
+  .scale-in{animation:scaleIn .2s ease forwards}
+  .slide-up{animation:slideUp .28s cubic-bezier(.2,.8,.2,1) forwards}
+  .pulse{animation:pulse 2s ease infinite}
+  .spin{animation:spin .8s linear infinite}
+  .dot-live{width:8px;height:8px;border-radius:50%;background:#22d36b;box-shadow:0 0 8px #22d36b;animation:pulse 2s infinite}
+
+  [draggable=true]{cursor:grab;-webkit-user-select:none;user-select:none}
+  [draggable=true]:active{cursor:grabbing}
+
+  input,textarea,select{
+    background:#0c120f;color:#e8f3ec;border:1px solid rgba(212,175,55,0.18);
+    border-radius:9px;outline:none;font-family:inherit;font-size:14px;width:100%;
+    padding:10px 12px;transition:border-color .15s,box-shadow .15s;
+  }
+  input::placeholder,textarea::placeholder{color:#5a7064}
+  input:focus,textarea:focus,select:focus{border-color:#1fc56a;box-shadow:0 0 0 3px rgba(31,197,106,0.14)}
+  select{cursor:pointer;-webkit-appearance:none;appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%238aa395' stroke-width='2'><path d='M2 4l4 4 4-4'/></svg>");
+    background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
+  label{font-size:12px;color:#8aa395;font-weight:600;letter-spacing:.4px;display:block;margin-bottom:6px;text-transform:uppercase}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+
+  .recharts-tooltip-wrapper{z-index:999!important;outline:none!important}
+  .recharts-surface{overflow:visible}
+  .recharts-text{fill:#8aa395;font-size:11px}
+  .recharts-cartesian-grid line{stroke:rgba(212,175,55,0.07)}
+
+  .clamp1{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+  .clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+  .mobile-nav{display:none}
+  @media(max-width:860px){
+    .sidebar-desktop{display:none!important}
+    .mobile-nav{display:flex!important}
+    .main-pad{padding:16px 14px 88px!important}
+    .hide-mobile{display:none!important}
+    .grid-resp{grid-template-columns:1fr!important}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
+const RC = window.Recharts || {};
+const { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip: RTooltip, Legend, ResponsiveContainer, RadialBarChart, RadialBar, LineChart, Line } = RC;
+
+/* ============================================================
+   DESIGN TOKENS
+   ============================================================ */
+const C = {
+  bg:'#06090c', bg2:'#0c120f', bg3:'#121a15', bg4:'#18241d',
+  panel:'rgba(12,18,15,0.82)', panelSolid:'#0c120f',
+  border:'rgba(212,175,55,0.14)', borderHi:'rgba(212,175,55,0.34)',
+  cyan:'#1fc56a', cyanBright:'#5ef0a0', cyanDim:'rgba(31,197,106,0.14)',
+  gold:'#e0b73c', goldDim:'rgba(224,183,60,0.16)',
+  green:'#22d36b', greenDim:'rgba(34,211,107,0.14)',
+  red:'#ff5a5a', redDim:'rgba(255,90,90,0.14)',
+  purple:'#c7ced6', purpleDim:'rgba(199,206,214,0.13)',
+  orange:'#d98a2b', pink:'#cbb24f',
+  text:'#e8f3ec', textDim:'#8aa395', textMuted:'#4f6359',
+};
+
+const SERVICES = {
+  basic:      { label:'Basic Detail',     color:'#9fb0bd', price:150 },
+  deluxe:     { label:'Deluxe Detail',    color:'#e0b73c', price:250 },
+  premium:    { label:'Premium Detail',   color:'#f0c948', price:350 },
+  exterior:   { label:'Full Exterior',    color:'#1fc56a', price:200 },
+  correction: { label:'Paint Correction', color:'#d98a2b', price:600 },
+  ceramic:    { label:'Ceramic Coating',  color:'#5ef0a0', price:1200 },
+  addon:      { label:'Add-on',           color:'#6f8478', price:60 },
+  other:      { label:'Service',          color:'#8aa395', price:0 },
+};
+
+const TEAM = [
+  { id:'habib',   name:'Habib', role:'Owner', color:'#1fc56a', initials:'H' },
+  { id:'partner', name:'Ryan',  role:'Owner', color:'#e0b73c', initials:'R' },
+];
+const teamById = id => TEAM.find(t=>t.id===id) || { name:'Unassigned', color:'#8aa395', initials:'?' };
+
+const PRIORITY = { high:{label:'High',color:'#ff5a5a'}, medium:{label:'Medium',color:'#e0b73c'}, low:{label:'Low',color:'#8aa395'} };
+const TASK_COLS = [
+  { id:'not-started', label:'Not Started', color:'#8aa395' },
+  { id:'in-progress', label:'In Progress', color:'#1fc56a' },
+  { id:'waiting',     label:'Waiting',     color:'#e0b73c' },
+  { id:'completed',   label:'Completed',   color:'#22d36b' },
+];
+
+const NAV = [
+  { id:'dashboard',     label:'Command Center', icon:'home' },
+  { id:'schedule',      label:'Schedule',       icon:'calendar' },
+  { id:'tasks',         label:'Tasks',          icon:'check' },
+  { id:'finance',       label:'Finance',        icon:'chart' },
+  { id:'goals',         label:'Goals',          icon:'target' },
+  { id:'team',          label:'Team',           icon:'message' },
+  { id:'reports',       label:'Reports',        icon:'file' },
+  { id:'notifications', label:'Notifications',  icon:'bell' },
+];
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+const fmt$ = n => '$'+Math.round(n).toLocaleString();
+const fmt$k = n => n>=1000 ? '$'+(n/1000).toFixed(n>=10000?0:1)+'k' : '$'+n;
+const pct = (a,b) => b? Math.round((a/b)*100) : 0;
+const todayISO = () => new Date().toISOString().slice(0,10);
+const iso = d => d.toISOString().slice(0,10);
+const pad2 = n => String(n).padStart(2,'0');
+const uid = () => Math.random().toString(36).slice(2,10);
+
+function fmtDate(isoStr, opt){
+  const d = new Date(isoStr+'T00:00:00');
+  return d.toLocaleDateString('en-US', opt || { month:'short', day:'numeric' });
+}
+function relTime(ts){
+  const diff = (Date.now()-ts)/1000;
+  if(diff<60) return 'just now';
+  if(diff<3600) return Math.floor(diff/60)+'m ago';
+  if(diff<86400) return Math.floor(diff/3600)+'h ago';
+  return Math.floor(diff/86400)+'d ago';
+}
+function fmtTime(hhmm){
+  const [h,m] = hhmm.split(':').map(Number);
+  const ap = h>=12?'PM':'AM'; const hr = h%12||12;
+  return hr+':'+pad2(m)+' '+ap;
+}
+function addDays(isoStr, n){ const d=new Date(isoStr+'T00:00:00'); d.setDate(d.getDate()+n); return localISO(d); }
+function startOfWeek(d){ const x=new Date(d); x.setDate(x.getDate()-x.getDay()); x.setHours(0,0,0,0); return x; }
+function localISO(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+
+const NOW = new Date();
+const TODAY = localISO(NOW);
+
+/* ============================================================
+   GOHIGHLEVEL  — live data layer (no seed / no mock numbers)
+   ============================================================ */
+const GHL_LOC='4oujU1ql0szJ60pb1xzk';
+const GHL_CAL='sA5qta4JYh961np0ienC';
+const GHL_USER='v1rBWcBX8nB2a3RwvpzR';
+const GHL_PROXY='/.netlify/functions/ghl';
+
+/* GHL custom-field IDs (discovered from live records) */
+const CF_VEHICLE='MJaH6FI38stKWO0Q4z4k';
+const CF_SERVICE='giKcGWgma7eU1SZmcAoH';
+
+async function ghlGet(path, params){
+  const url=new URL(GHL_PROXY, location.origin);
+  url.searchParams.set('ghlpath', path);
+  if(params) Object.entries(params).forEach(([k,v])=>{ if(v!=null) url.searchParams.set(k,String(v)); });
+  const r=await fetch(url);
+  if(!r.ok) throw new Error('GHL '+r.status+' '+path);
+  return r.json();
+}
+
+/* classify a free-text service/title into a SERVICES key */
+function classifyService(str){
+  const s=(str||'').toLowerCase();
+  if(/ceramic|coating/.test(s)) return 'ceramic';
+  if(/correction|polish|buff/.test(s)) return 'correction';
+  if(/premium/.test(s)) return 'premium';
+  if(/deluxe/.test(s)) return 'deluxe';
+  if(/exterior|wash/.test(s)) return 'exterior';
+  if(/basic|interior|maintenance/.test(s)) return 'basic';
+  if(/add[- ]?on/.test(s)) return 'addon';
+  return 'other';
+}
+/* pull a "$1,200" style price out of free text; 0 if none */
+function parsePrice(str){
+  const m=(str||'').replace(/,/g,'').match(/\$\s?(\d+(?:\.\d+)?)/);
+  return m?Math.round(+m[1]):0;
+}
+function cfVal(contact, id){
+  const f=(contact&&contact.customFields||[]).find(x=>x.id===id);
+  return f?(f.value||''):'';
+}
+
+/* map a GHL calendar event -> appointment shape the UI expects */
+function mapEvent(ev, contactMap){
+  const ct=contactMap[ev.contactId]||{};
+  const start=ev.startTime?new Date(ev.startTime):null;
+  const svcText=cfVal(ct,CF_SERVICE)||ev.title||'';
+  const status=(ev.appointmentStatus||'').toLowerCase();
+  return {
+    id:ev.id||uid(),
+    customer:ct.contactName||ct.firstName||(ev.title||'').replace(/\s*\$\d.*$/,'').trim()||'Customer',
+    vehicle:cfVal(ct,CF_VEHICLE)||'',
+    service:classifyService(svcText),
+    price:parsePrice(ev.title)||parsePrice(ev.notes)||0,
+    date:start?localISO(start):TODAY,
+    time:start?pad2(start.getHours())+':'+pad2(start.getMinutes()):'09:00',
+    address:ev.address||'',
+    assignedTo:ev.assignedUserId||'',
+    status:/cancel/.test(status)?'cancelled':/show|complete/.test(status)?'completed':'scheduled',
+    notes:ev.notes||ev.description||'',
+  };
+}
+
+/* map a GHL opportunity -> lead shape */
+function mapOpportunity(op, stageMap){
+  const st=(op.status||'').toLowerCase();
+  let stage;
+  if(st==='won') stage='won';
+  else if(st==='lost'||st==='abandoned') stage='lost';
+  else {
+    const sn=(stageMap[op.pipelineStageId]||'').toLowerCase();
+    stage=/quote|estimate/.test(sn)?'quoted':/warm|cold|contact/.test(sn)?'contacted':'new';
+  }
+  return {
+    id:op.id||uid(),
+    name:op.name||(op.contact&&op.contact.name)||'Lead',
+    service:classifyService(op.name),
+    value:Math.round(op.monetaryValue||0),
+    stage,
+    source:op.source||'',
+    ts:Date.parse(op.createdAt||op.dateAdded||'')||Date.now(),
+  };
+}
+
+/* live aggregates derived from real appointment prices */
+function revDaily(appts){
+  const out=[]; const base=new Date(NOW); base.setHours(0,0,0,0); base.setDate(base.getDate()-29);
+  for(let i=0;i<30;i++){ const d=new Date(base); d.setDate(d.getDate()+i); const ds=localISO(d);
+    out.push({ date:fmtDate(ds), full:ds, revenue:appts.filter(a=>a.date===ds&&a.status!=='cancelled').reduce((s,a)=>s+(a.price||0),0) }); }
+  return out;
+}
+function revMonthly(appts){
+  const out=[]; const now=new Date(NOW);
+  for(let i=5;i>=0;i--){ const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    const y=d.getFullYear(),m=d.getMonth();
+    const rev=appts.filter(a=>{ const ad=new Date(a.date+'T00:00:00'); return ad.getFullYear()===y&&ad.getMonth()===m&&a.status!=='cancelled'; })
+      .reduce((s,a)=>s+(a.price||0),0);
+    out.push({ month:d.toLocaleDateString('en-US',{month:'short'}), revenue:rev }); }
+  return out;
+}
+function serviceBreakdown(appts){
+  const map={};
+  (appts||[]).filter(a=>a.status!=='cancelled').forEach(a=>{ const k=a.service||'other'; map[k]=(map[k]||0)+(a.price||0); });
+  return Object.keys(map).filter(k=>map[k]>0).map(k=>({ name:(SERVICES[k]||SERVICES.other).label, key:k, value:map[k], color:(SERVICES[k]||SERVICES.other).color }));
+}
+function sumRange(appts,from,to){ return (appts||[]).filter(a=>a.date>=from&&a.date<=to&&a.status!=='cancelled').reduce((s,a)=>s+(a.price||0),0); }
+
+/* orchestrate the live pull */
+async function loadGHL(){
+  const now=new Date(NOW);
+  const winStart=new Date(now); winStart.setDate(winStart.getDate()-60);
+  const winEnd=new Date(now); winEnd.setDate(winEnd.getDate()+60);
+
+  const [eventsRes, oppRes, pipeRes, contactRes] = await Promise.all([
+    ghlGet('/calendars/events',{ locationId:GHL_LOC, userId:GHL_USER, startTime:winStart.getTime(), endTime:winEnd.getTime() }).catch(()=>({events:[]})),
+    ghlGet('/opportunities/search',{ location_id:GHL_LOC, limit:100 }).catch(()=>({opportunities:[]})),
+    ghlGet('/opportunities/pipelines',{ locationId:GHL_LOC }).catch(()=>({pipelines:[]})),
+    ghlGet('/contacts/',{ locationId:GHL_LOC, limit:100 }).catch(()=>({contacts:[]})),
+  ]);
+
+  const contactMap={};
+  (contactRes.contacts||[]).forEach(c=>{ contactMap[c.id]=c; });
+  const stageMap={};
+  (pipeRes.pipelines||[]).forEach(p=>(p.stages||[]).forEach(s=>{ stageMap[s.id]=s.name; }));
+
+  const appts=(eventsRes.events||[]).map(ev=>mapEvent(ev,contactMap));
+  const leads=(oppRes.opportunities||[]).map(op=>mapOpportunity(op,stageMap));
+
+  return { appts, leads, contactCount:(contactRes.meta&&contactRes.meta.total)||contactRes.contacts&&contactRes.contacts.length||0 };
+}
+
+
+/* ============================================================
+   GLOBAL STATE
+   ============================================================ */
+const LS_PREFIX='mmd.';
+function lsLoad(key, fallback){ try{ const v=localStorage.getItem(LS_PREFIX+key); return v?JSON.parse(v):fallback; }catch(e){ return fallback; } }
+function lsSave(key, val){ try{ localStorage.setItem(LS_PREFIX+key, JSON.stringify(val)); }catch(e){} }
+
+const AppCtx = createContext(null);
+const useApp = () => useContext(AppCtx);
+
+function AppProvider({ children }){
+  const [page, setPage] = useState('dashboard');
+  const [user, setUser] = useState(()=>lsLoad('user','habib'));
+  useEffect(()=>{ lsSave('user',user); },[user]);
+  /* Live from GoHighLevel */
+  const [appts, setAppts] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [contactCount, setContactCount] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [ghlError, setGhlError] = useState(null);
+  const [lastSync, setLastSync] = useState(null);
+  /* Local workspaces (user-managed; not numbers) */
+  const [tasks, setTasks] = useState(()=>lsLoad('tasks',[]));
+  const [goals, setGoals] = useState(()=>lsLoad('goals',[]));
+  const [notifs, setNotifs] = useState([]);
+  const [messages, setMessages] = useState(()=>lsLoad('messages',[]));
+  const [announce, setAnnounce] = useState(()=>lsLoad('announce',[]));
+  const [toasts, setToasts] = useState([]);
+
+  useEffect(()=>{ lsSave('tasks',tasks); },[tasks]);
+  useEffect(()=>{ lsSave('goals',goals); },[goals]);
+  useEffect(()=>{ lsSave('messages',messages); },[messages]);
+  useEffect(()=>{ lsSave('announce',announce); },[announce]);
+
+  const toast = useCallback((msg, kind='success')=>{
+    const id = uid();
+    setToasts(t=>[...t,{ id, msg, kind }]);
+    setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)), 3200);
+  },[]);
+
+  const sync = useCallback(async (announce)=>{
+    setLoading(true);
+    try{
+      const d = await loadGHL();
+      setAppts(d.appts);
+      setLeads(d.leads);
+      setContactCount(d.contactCount);
+      setGhlError(null);
+      setLastSync(new Date());
+      if(announce) toast('Synced with GoHighLevel');
+    }catch(e){
+      setGhlError(e.message||'GoHighLevel connection failed');
+      if(announce) toast('GoHighLevel sync failed','error');
+    }finally{ setLoading(false); }
+  },[toast]);
+
+  useEffect(()=>{ sync(false); const t=setInterval(()=>sync(false),300000); return ()=>clearInterval(t); },[sync]);
+
+  const api = {
+    page, setPage, user, setUser, toast, toasts, setToasts,
+    appts, tasks, leads, goals, notifs, messages, announce,
+    loading, ghlError, lastSync, contactCount, sync,
+
+    addAppt:(a)=>{ setAppts(p=>[...p,{...a,id:uid()}]); toast('Appointment scheduled'); },
+    updateAppt:(id,patch)=>setAppts(p=>p.map(a=>a.id===id?{...a,...patch}:a)),
+    delAppt:(id)=>{ setAppts(p=>p.filter(a=>a.id!==id)); toast('Appointment removed','info'); },
+
+    addTask:(t)=>{ setTasks(p=>[...p,{...t,id:uid(),created:Date.now(),comments:[]}]); toast('Task created'); },
+    updateTask:(id,patch)=>setTasks(p=>p.map(t=>t.id===id?{...t,...patch}:t)),
+    delTask:(id)=>{ setTasks(p=>p.filter(t=>t.id!==id)); toast('Task deleted','info'); },
+    addComment:(id,text)=>setTasks(p=>p.map(t=>t.id===id?{...t,comments:[...t.comments,{by:user,text,ts:Date.now()}]}:t)),
+
+    addGoal:(g)=>{ setGoals(p=>[...p,{...g,id:uid()}]); toast('Goal added'); },
+    updateGoal:(id,patch)=>setGoals(p=>p.map(g=>g.id===id?{...g,...patch}:g)),
+    delGoal:(id)=>setGoals(p=>p.filter(g=>g.id!==id)),
+
+    markNotif:(id)=>setNotifs(p=>p.map(n=>n.id===id?{...n,read:true}:n)),
+    markAllNotifs:()=>{ setNotifs(p=>p.map(n=>({...n,read:true}))); toast('All marked read'); },
+    clearNotifs:()=>{ setNotifs([]); toast('Notifications cleared','info'); },
+
+    sendMessage:(text)=>setMessages(p=>[...p,{id:uid(),by:user,text,ts:Date.now()}]),
+    addAnnounce:(title,text)=>{ setAnnounce(p=>[{id:uid(),by:user,title,text,ts:Date.now(),pinned:false},...p]); toast('Announcement posted'); },
+
+    advanceLead:(id)=>setLeads(p=>p.map(l=>{
+      const order=['new','contacted','quoted','won']; const i=order.indexOf(l.stage);
+      return l.id===id && i<order.length-1 ? {...l,stage:order[i+1]} : l;
+    })),
+  };
+
+  return <AppCtx.Provider value={api}>{children}</AppCtx.Provider>;
+}
+
+/* ============================================================
+   ICONS
+   ============================================================ */
+const ICONS = {
+  home:<><path d="M3 9.5L12 3l9 6.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"/><path d="M9 21v-6h6v6"/></>,
+  calendar:<><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/></>,
+  check:<><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12l3 3 5-6"/></>,
+  chart:<><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="11" width="3" height="6"/><rect x="12" y="7" width="3" height="10"/><rect x="17" y="13" width="3" height="4"/></>,
+  target:<><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></>,
+  users:<><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 6.1"/><path d="M17 20a5.5 5.5 0 0 0-3-4.9"/></>,
+  message:<><path d="M21 12a8 8 0 0 1-11.4 7.2L4 21l1.8-5.6A8 8 0 1 1 21 12Z"/></>,
+  file:<><path d="M6 2.5h8l5 5V21a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z"/><path d="M14 2.5V8h5M9 13h6M9 17h6"/></>,
+  bell:<><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7.5-2.5 7.5h17S18 15 18 9Z"/><path d="M10.5 20a2 2 0 0 0 3 0"/></>,
+  plus:<><path d="M12 5v14M5 12h14"/></>,
+  search:<><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></>,
+  x:<><path d="M6 6l12 12M18 6L6 18"/></>,
+  chevL:<><path d="M15 6l-6 6 6 6"/></>,
+  chevR:<><path d="M9 6l6 6-6 6"/></>,
+  chevD:<><path d="M6 9l6 6 6-6"/></>,
+  up:<><path d="M12 19V5M6 11l6-6 6 6"/></>,
+  down:<><path d="M12 5v14M6 13l6 6 6-6"/></>,
+  trendUp:<><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v5h-5"/></>,
+  trendDown:<><path d="M3 7l6 6 4-4 8 8"/><path d="M21 17v-5h-5"/></>,
+  dollar:<><path d="M12 2v20"/><path d="M16.5 6.5C16 4.5 14 4 12 4c-3 0-4.5 1.5-4.5 3.3 0 4.7 9 2.5 9 7.2C16.5 16.5 14.5 18 12 18c-2.5 0-4.5-.8-5-3"/></>,
+  clock:<><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></>,
+  pin:<><path d="M12 21v-7"/><path d="M9 3h6l-1 6 3 2.5V13H7v-1.5L10 9 9 3Z"/></>,
+  star:<><path d="M12 3l2.6 5.5 6 .8-4.4 4.2 1.1 6L12 17l-5.3 2.5 1.1-6L3.4 9.3l6-.8L12 3Z"/></>,
+  car:<><path d="M5 16h14M4 16l1.5-5.5A2 2 0 0 1 7.4 9h9.2a2 2 0 0 1 1.9 1.5L20 16"/><rect x="3.5" y="16" width="17" height="3.5" rx="1"/><circle cx="7.5" cy="19.5" r="1.3"/><circle cx="16.5" cy="19.5" r="1.3"/></>,
+  pin2:<><path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></>,
+  phone:<><path d="M5 4h3l1.5 4-2 1.5a11 11 0 0 0 5 5l1.5-2 4 1.5V18a2 2 0 0 1-2 2A15 15 0 0 1 4 6a2 2 0 0 1 1-2Z"/></>,
+  mail:<><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></>,
+  edit:<><path d="M4 20h4L18 10l-4-4L4 16v4Z"/><path d="M13 5l4 4"/></>,
+  trash:<><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></>,
+  dots:<><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></>,
+  download:<><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></>,
+  filter:<><path d="M3 5h18l-7 8v6l-4-2v-4L3 5Z"/></>,
+  settings:<><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></>,
+  logout:<><path d="M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3"/><path d="M10 12H3M6 8l-3 4 3 4"/></>,
+  flag:<><path d="M5 21V4"/><path d="M5 4h11l-2 3 2 3H5"/></>,
+  zap:<><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8Z"/></>,
+  alert:<><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></>,
+  trophy:<><path d="M7 4h10v4a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3M9 20h6M10 16h4v4h-4z"/></>,
+  menu:<><path d="M4 6h16M4 12h16M4 18h16"/></>,
+};
+function Icon({ name, size=18, color='currentColor', stroke=1.8, style }){
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
+      strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" style={style}>
+      {ICONS[name]||null}
+    </svg>
+  );
+}
+
+/* ============================================================
+   UI PRIMITIVES
+   ============================================================ */
+function Card({ children, style, pad=20, className='', onClick, hover }){
+  const [h,setH]=useState(false);
+  return (
+    <div onClick={onClick}
+      onMouseEnter={()=>hover&&setH(true)} onMouseLeave={()=>setH(false)}
+      className={className}
+      style={{
+        background:C.panel, border:`1px solid ${h?C.borderHi:C.border}`,
+        borderRadius:16, padding:pad, backdropFilter:'blur(8px)',
+        boxShadow:h?'0 12px 40px rgba(0,0,0,.4)':'0 4px 20px rgba(0,0,0,.25)',
+        transition:'border-color .2s, box-shadow .2s, transform .2s',
+        cursor:onClick?'pointer':'default', transform:h&&onClick?'translateY(-2px)':'none',
+        ...style }}>
+      {children}
+    </div>
+  );
+}
+
+function Btn({ children, onClick, variant='primary', size='md', icon, style, type='button', disabled }){
+  const [h,setH]=useState(false);
+  const sizes={ sm:{padding:'7px 12px',fontSize:13}, md:{padding:'10px 16px',fontSize:14}, lg:{padding:'13px 22px',fontSize:15} };
+  const variants={
+    primary:{ background:h?'linear-gradient(135deg,#2fe07e,#ecc24a)':'linear-gradient(135deg,#1fc56a,#e0b73c)', color:'#06090c', boxShadow:h?'0 6px 22px rgba(31,197,106,.4)':'0 2px 12px rgba(31,197,106,.25)' },
+    ghost:{ background:h?C.cyanDim:'transparent', color:C.cyan, border:`1px solid ${h?C.borderHi:C.border}` },
+    soft:{ background:h?'rgba(31,197,106,0.16)':C.cyanDim, color:C.cyanBright },
+    danger:{ background:h?'rgba(255,77,77,0.2)':C.redDim, color:C.red, border:`1px solid rgba(255,77,77,0.25)` },
+    dark:{ background:h?C.bg3:C.bg2, color:C.text, border:`1px solid ${C.border}` },
+  };
+  return (
+    <button type={type} onClick={onClick} disabled={disabled}
+      onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+      style={{ display:'inline-flex',alignItems:'center',gap:7,justifyContent:'center',
+        borderRadius:10,fontWeight:600,letterSpacing:.3,transition:'all .18s',
+        opacity:disabled?.5:1, pointerEvents:disabled?'none':'auto',
+        ...sizes[size], ...variants[variant], ...style }}>
+      {icon && <Icon name={icon} size={size==='sm'?15:17} />}
+      {children}
+    </button>
+  );
+}
+
+function Badge({ children, color=C.cyan, solid }){
+  return (
+    <span style={{ display:'inline-flex',alignItems:'center',gap:5,
+      padding:'3px 10px',borderRadius:20,fontSize:11.5,fontWeight:700,letterSpacing:.4,
+      color:solid?'#04101c':color, background:solid?color:`${color}22`,
+      border:`1px solid ${color}44` }}>
+      {children}
+    </span>
+  );
+}
+
+function Avatar({ id, size=34, ring }){
+  const m = teamById(id);
+  return (
+    <div style={{ width:size,height:size,borderRadius:'50%',flex:'0 0 auto',
+      display:'flex',alignItems:'center',justifyContent:'center',
+      background:`${m.color}22`, color:m.color, fontWeight:700, fontSize:size*0.4,
+      border:`2px solid ${ring?m.color:m.color+'55'}`, letterSpacing:.5 }}>
+      {m.initials}
+    </div>
+  );
+}
+
+function Ring({ value, size=66, stroke=6, color=C.cyan, label }){
+  const r=(size-stroke)/2, circ=2*Math.PI*r, off=circ-(Math.min(value,100)/100)*circ;
+  return (
+    <div style={{ position:'relative', width:size, height:size }}>
+      <svg width={size} height={size} style={{ transform:'rotate(-90deg)' }}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={C.bg3} strokeWidth={stroke}/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={circ} strokeDashoffset={off} strokeLinecap="round"
+          style={{ transition:'stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1)' }}/>
+      </svg>
+      <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',
+        alignItems:'center',justifyContent:'center' }}>
+        <span style={{ fontSize:size*0.26, fontWeight:800, color }}>{value}%</span>
+        {label && <span style={{ fontSize:9, color:C.textDim }}>{label}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ProgressBar({ value, max, color=C.cyan, height=8, showPct }){
+  const p = Math.min(pct(value,max),100);
+  return (
+    <div style={{ display:'flex',alignItems:'center',gap:10 }}>
+      <div style={{ flex:1,height,background:C.bg3,borderRadius:height,overflow:'hidden' }}>
+        <div style={{ width:p+'%',height:'100%',borderRadius:height,
+          background:`linear-gradient(90deg,${color},${color}aa)`,
+          boxShadow:`0 0 10px ${color}66`, transition:'width 1s cubic-bezier(.2,.8,.2,1)',
+          animation:'growBar 1s ease' }}/>
+      </div>
+      {showPct && <span style={{ fontSize:12,fontWeight:700,color,minWidth:34,textAlign:'right' }}>{p}%</span>}
+    </div>
+  );
+}
+
+function Modal({ open, onClose, title, children, width=520, footer }){
+  useEffect(()=>{
+    if(!open) return;
+    const h=e=>e.key==='Escape'&&onClose();
+    window.addEventListener('keydown',h);
+    return ()=>window.removeEventListener('keydown',h);
+  },[open,onClose]);
+  if(!open) return null;
+  return (
+    <div onClick={onClose} className="fade-in-fast" style={{ position:'fixed',inset:0,zIndex:200,
+      background:'rgba(2,4,3,0.72)',backdropFilter:'blur(4px)',
+      display:'flex',alignItems:'center',justifyContent:'center',padding:16 }}>
+      <div onClick={e=>e.stopPropagation()} className="scale-in" style={{ width:'100%',maxWidth:width,
+        maxHeight:'90vh',display:'flex',flexDirection:'column',
+        background:C.bg2,border:`1px solid ${C.borderHi}`,borderRadius:18,
+        boxShadow:'0 30px 80px rgba(0,0,0,.6)' }}>
+        <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',
+          padding:'18px 22px',borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:17,fontWeight:700,color:C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ width:32,height:32,borderRadius:8,display:'grid',
+            placeItems:'center',color:C.textDim }}><Icon name="x" size={18}/></button>
+        </div>
+        <div style={{ padding:22, overflowY:'auto' }}>{children}</div>
+        {footer && <div style={{ padding:'16px 22px',borderTop:`1px solid ${C.border}`,
+          display:'flex',justifyContent:'flex-end',gap:10 }}>{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }){
+  return <div style={{ marginBottom:14 }}><label>{label}</label>{children}</div>;
+}
+
+function PageHead({ title, sub, actions }){
+  return (
+    <div style={{ display:'flex',alignItems:'flex-end',justifyContent:'space-between',
+      gap:16,marginBottom:24,flexWrap:'wrap' }}>
+      <div>
+        <h1 style={{ fontSize:'clamp(22px,3vw,30px)',fontWeight:800,letterSpacing:-.5,
+          background:'linear-gradient(90deg,#5ef0a0,#fff 55%,#e0b73c)',
+          WebkitBackgroundClip:'text',backgroundClip:'text',color:'transparent' }}>{title}</h1>
+        {sub && <p style={{ color:C.textDim,fontSize:13.5,marginTop:5 }}>{sub}</p>}
+      </div>
+      {actions && <div style={{ display:'flex',gap:10,flexWrap:'wrap' }}>{actions}</div>}
+    </div>
+  );
+}
+
+function ChartTip({ active, payload, label, money }){
+  if(!active||!payload||!payload.length) return null;
+  return (
+    <div style={{ background:C.bg,border:`1px solid ${C.borderHi}`,borderRadius:10,
+      padding:'10px 14px',boxShadow:'0 8px 24px rgba(0,0,0,.5)' }}>
+      {label && <div style={{ color:C.textDim,fontSize:11,marginBottom:6,fontWeight:600 }}>{label}</div>}
+      {payload.map((p,i)=>(
+        <div key={i} style={{ display:'flex',alignItems:'center',gap:8,fontSize:13,fontWeight:700,color:p.color||p.fill||C.cyan }}>
+          <span style={{ width:8,height:8,borderRadius:2,background:p.color||p.fill }}/>
+          {p.name}: {money?fmt$(p.value):p.value.toLocaleString()}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Toasts(){
+  const { toasts } = useApp();
+  const kindColor={ success:C.green, info:C.cyan, error:C.red };
+  return (
+    <div style={{ position:'fixed',bottom:24,right:24,zIndex:400,display:'flex',
+      flexDirection:'column',gap:10,pointerEvents:'none' }}>
+      {toasts.map(t=>(
+        <div key={t.id} className="slide-up" style={{ display:'flex',alignItems:'center',gap:10,
+          padding:'12px 18px',borderRadius:12,background:C.bg2,
+          border:`1px solid ${kindColor[t.kind]}55`,boxShadow:'0 10px 30px rgba(0,0,0,.5)',
+          minWidth:220, color:C.text, fontSize:14, fontWeight:600 }}>
+          <span style={{ width:9,height:9,borderRadius:'50%',background:kindColor[t.kind],
+            boxShadow:`0 0 10px ${kindColor[t.kind]}` }}/>
+          {t.msg}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+function KPI({ label, value, sub, trend, trendUp, color=C.cyan, icon, big }){
+  return (
+    <Card hover pad={18} style={{ display:'flex',flexDirection:'column',gap:10,minHeight:big?138:118 }}>
+      <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}>
+        <span style={{ fontSize:11.5,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase' }}>{label}</span>
+        <div style={{ width:30,height:30,borderRadius:9,background:`${color}1c`,display:'grid',placeItems:'center' }}>
+          <Icon name={icon} size={16} color={color}/>
+        </div>
+      </div>
+      <div style={{ fontSize:big?30:25,fontWeight:800,color:C.text,letterSpacing:-.5,lineHeight:1 }}>{value}</div>
+      <div style={{ display:'flex',alignItems:'center',gap:7,marginTop:'auto' }}>
+        {trend!=null && (
+          <span style={{ display:'inline-flex',alignItems:'center',gap:3,fontSize:12,fontWeight:700,
+            color:trendUp?C.green:C.red }}>
+            <Icon name={trendUp?'trendUp':'trendDown'} size={13}/>{trend}
+          </span>
+        )}
+        {sub && <span style={{ fontSize:12,color:C.textDim }}>{sub}</span>}
+      </div>
+    </Card>
+  );
+}
+
+const BLANK='—';
+function Dashboard(){
+  const { appts, tasks, leads, goals, notifs, setPage, loading, ghlError } = useApp();
+  const live = appts.filter(a=>a.status!=='cancelled');
+  const todayAppts = live.filter(a=>a.date===TODAY).sort((a,b)=>a.time.localeCompare(b.time));
+  const todayRev = todayAppts.reduce((s,a)=>s+(a.price||0),0);
+  const ws = localISO(startOfWeek(NOW));
+  const mStart = localISO(new Date(NOW.getFullYear(),NOW.getMonth(),1));
+  const weekRev = sumRange(live, ws, TODAY);
+  const monthRev = sumRange(live, mStart, TODAY);
+  const monthGoal = goals.find(g=>g.cat==='business' && /month/i.test(g.label));
+  const dueTasks = tasks.filter(t=>t.due===TODAY && t.status!=='completed');
+  const followUps = leads.filter(l=>l.stage==='quoted'||l.stage==='contacted');
+  const unread = notifs.filter(n=>!n.read).length;
+  const openLeads = leads.filter(l=>l.stage!=='won'&&l.stage!=='lost').length;
+  const priced = live.filter(a=>a.price>0);
+  const avgTicket = priced.length ? Math.round(priced.reduce((s,a)=>s+a.price,0)/priced.length) : null;
+  const leadsThisMonth = leads.filter(l=>l.ts>=new Date(NOW.getFullYear(),NOW.getMonth(),1).getTime()).length;
+  const ceramicRev = live.filter(a=>a.service==='ceramic'&&a.date>=mStart&&a.date<=TODAY).reduce((s,a)=>s+(a.price||0),0);
+  const breakdown = serviceBreakdown(live);
+  const dailyRev = revDaily(live);
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Command Center" sub={NOW.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})+' · Matrix Mobile Details'}/>
+
+      {ghlError && <Card pad={14} style={{ marginBottom:16,borderColor:C.red+'55',background:C.redDim,display:'flex',alignItems:'center',gap:10 }}>
+        <Icon name="alert" size={18} color={C.red}/>
+        <span style={{ fontSize:13,color:C.text }}>GoHighLevel: {ghlError}. Showing whatever loaded.</span>
+      </Card>}
+
+      {/* TODAY OVERVIEW STRIP */}
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:12,marginBottom:18 }} className="grid-resp">
+        {[
+          { l:'Jobs Today', v:todayAppts.length, c:C.cyan, ic:'car' },
+          { l:'Revenue Today', v:fmt$(todayRev), c:C.green, ic:'dollar' },
+          { l:'Open Leads', v:openLeads, c:C.gold, ic:'zap' },
+          { l:'Follow-ups Due', v:followUps.length, c:C.orange, ic:'phone' },
+          { l:'Tasks Due', v:dueTasks.length, c:C.purple, ic:'check' },
+          { l:'Unread Alerts', v:unread, c:C.pink, ic:'bell' },
+        ].map((x,i)=>(
+          <Card key={i} pad={14} hover style={{ display:'flex',alignItems:'center',gap:12 }}>
+            <div style={{ width:40,height:40,borderRadius:11,background:`${x.c}1c`,display:'grid',placeItems:'center',flex:'0 0 auto' }}>
+              <Icon name={x.ic} size={19} color={x.c}/>
+            </div>
+            <div>
+              <div style={{ fontSize:21,fontWeight:800,color:C.text,lineHeight:1 }}>{x.v}</div>
+              <div style={{ fontSize:11,color:C.textDim,marginTop:3 }}>{x.l}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* KPI CARDS */}
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
+        <KPI label="Revenue This Week" value={fmt$(weekRev)} icon="dollar" color={C.cyan} sub="booked jobs"/>
+        <KPI label="Revenue This Month" value={fmt$(monthRev)} icon="trendUp" color={C.green} sub={monthGoal?'of '+fmt$(monthGoal.target)+' goal':'month to date'}/>
+        <KPI label="Avg Ticket" value={avgTicket!=null?fmt$(avgTicket):BLANK} icon="chart" color={C.gold} sub="priced jobs"/>
+        <KPI label="Leads This Month" value={leadsThisMonth} icon="zap" color={C.purple}/>
+        <KPI label="Conversion" value={BLANK} icon="target" color={C.cyanBright} sub="needs setup"/>
+        <KPI label="Repeat Rate" value={BLANK} icon="users" color={C.pink} sub="needs setup"/>
+        <KPI label="Outstanding" value={BLANK} icon="alert" color={C.red} sub="invoices not connected"/>
+        <KPI label="Ceramic Revenue (mo)" value={fmt$(ceramicRev)} icon="star" color={C.orange}/>
+      </div>
+
+      {/* MAIN GRID */}
+      <div style={{ display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:16,marginBottom:16 }} className="grid-resp">
+        {/* Revenue chart */}
+        <Card pad={20}>
+          <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14 }}>
+            <div>
+              <h3 style={{ fontSize:15,fontWeight:700 }}>Revenue — Last 30 Days</h3>
+              <p style={{ fontSize:12,color:C.textDim,marginTop:2 }}>Daily revenue from booked jobs (GoHighLevel)</p>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={230}>
+            <AreaChart data={dailyRev} margin={{ top:5,right:8,left:-18,bottom:0 }}>
+              <defs>
+                <linearGradient id="gRev" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={C.cyan} stopOpacity={0.5}/>
+                  <stop offset="100%" stopColor={C.cyan} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="date" tick={{ fontSize:10 }} interval={4} axisLine={false} tickLine={false}/>
+              <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+v/1000+'k'}/>
+              <RTooltip content={<ChartTip money/>}/>
+              <Area type="monotone" dataKey="revenue" stroke={C.cyan} strokeWidth={2.5} fill="url(#gRev)" name="Revenue"/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Goal progress */}
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:18 }}>Goal Progress</h3>
+          {monthGoal ? (
+            <div style={{ display:'flex',gap:18,alignItems:'center',marginBottom:20 }}>
+              <Ring value={pct(monthRev,monthGoal.target)} size={92} stroke={8} color={C.green} label="Month"/>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13,color:C.textDim }}>Monthly Revenue</div>
+                <div style={{ fontSize:22,fontWeight:800,marginTop:2 }}>{fmt$(monthRev)}</div>
+                <div style={{ fontSize:12,color:C.textDim,marginTop:2 }}>of {fmt$(monthGoal.target)} target</div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display:'flex',gap:18,alignItems:'center',marginBottom:20 }}>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13,color:C.textDim }}>Monthly Revenue (live)</div>
+                <div style={{ fontSize:26,fontWeight:800,marginTop:2 }}>{fmt$(monthRev)}</div>
+                <button onClick={()=>setPage('goals')} style={{ fontSize:12,color:C.cyan,fontWeight:600,marginTop:6 }}>Set a monthly goal →</button>
+              </div>
+            </div>
+          )}
+          <div style={{ display:'flex',flexDirection:'column',gap:16 }}>
+            <div style={{ display:'flex',justifyContent:'space-between',fontSize:12.5 }}>
+              <span style={{ color:C.textDim }}>This Week</span>
+              <span style={{ fontWeight:700 }}>{fmt$(weekRev)}</span>
+            </div>
+            {goals.filter(g=>g.cat==='business').slice(0,3).map(g=>(
+              <div key={g.id}>
+                <div style={{ display:'flex',justifyContent:'space-between',fontSize:12.5,marginBottom:6 }}>
+                  <span style={{ color:C.textDim }}>{g.label}</span>
+                  <span style={{ fontWeight:700 }}>{g.cur} / {g.target}</span>
+                </div>
+                <ProgressBar value={g.cur} max={g.target} color={C.gold} showPct/>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {/* BOTTOM ROW */}
+      <div style={{ display:'grid',gridTemplateColumns:'1.2fr 1fr 1fr',gap:16 }} className="grid-resp">
+        {/* Today's schedule */}
+        <Card pad={20}>
+          <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14 }}>
+            <h3 style={{ fontSize:15,fontWeight:700 }}>Today's Schedule</h3>
+            <button onClick={()=>setPage('schedule')} style={{ fontSize:12,color:C.cyan,fontWeight:600 }}>View all →</button>
+          </div>
+          <div style={{ display:'flex',flexDirection:'column',gap:10 }}>
+            {todayAppts.map(a=>{
+              const s=SERVICES[a.service];
+              return (
+                <div key={a.id} style={{ display:'flex',gap:12,alignItems:'center',padding:'10px 12px',
+                  background:C.bg2,borderRadius:11,border:`1px solid ${C.border}` }}>
+                  <div style={{ width:4,height:38,borderRadius:4,background:s.color }}/>
+                  <div style={{ fontSize:13,fontWeight:700,color:C.cyanBright,minWidth:62 }}>{fmtTime(a.time)}</div>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontSize:13.5,fontWeight:600 }} className="clamp1">{a.customer}</div>
+                    <div style={{ fontSize:11.5,color:C.textDim }} className="clamp1">{a.vehicle} · {s.label}</div>
+                  </div>
+                  <div style={{ fontSize:13,fontWeight:700,color:C.green }}>{fmt$(a.price)}</div>
+                  <Avatar id={a.assignedTo} size={28}/>
+                </div>
+              );
+            })}
+            {!todayAppts.length && <p style={{ color:C.textDim,fontSize:13,textAlign:'center',padding:20 }}>No jobs scheduled today.</p>}
+          </div>
+        </Card>
+
+        {/* Service mix */}
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:8 }}>Service Mix</h3>
+          <ResponsiveContainer width="100%" height={170}>
+            <PieChart>
+              <Pie data={breakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={42} outerRadius={68} paddingAngle={2} stroke="none">
+                {breakdown.map((e,i)=><Cell key={i} fill={e.color}/>)}
+              </Pie>
+              <RTooltip content={<ChartTip money/>}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display:'flex',flexWrap:'wrap',gap:6,marginTop:10 }}>
+            {breakdown.slice(0,4).map(e=>(
+              <span key={e.key} style={{ display:'inline-flex',alignItems:'center',gap:5,fontSize:11,color:C.textDim }}>
+                <span style={{ width:8,height:8,borderRadius:2,background:e.color }}/>{e.name}
+              </span>
+            ))}
+          </div>
+        </Card>
+
+        {/* Follow-ups + tasks */}
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>Action Items</h3>
+          <div style={{ fontSize:11,color:C.gold,fontWeight:700,letterSpacing:.5,marginBottom:8 }}>FOLLOW-UPS DUE</div>
+          <div style={{ display:'flex',flexDirection:'column',gap:8,marginBottom:16 }}>
+            {followUps.slice(0,3).map(l=>(
+              <div key={l.id} style={{ display:'flex',alignItems:'center',gap:8,fontSize:12.5 }}>
+                <span style={{ width:7,height:7,borderRadius:'50%',background:C.gold }}/>
+                <span style={{ flex:1 }} className="clamp1">{l.name} · {SERVICES[l.service].label}</span>
+                <span style={{ color:C.green,fontWeight:700 }}>{fmt$(l.value)}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize:11,color:C.purple,fontWeight:700,letterSpacing:.5,marginBottom:8 }}>TASKS DUE TODAY</div>
+          <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+            {dueTasks.map(t=>(
+              <div key={t.id} style={{ display:'flex',alignItems:'center',gap:8,fontSize:12.5 }}>
+                <span style={{ width:7,height:7,borderRadius:2,background:PRIORITY[t.priority].color }}/>
+                <span style={{ flex:1 }} className="clamp1">{t.title}</span>
+                <Avatar id={t.assignedTo} size={22}/>
+              </div>
+            ))}
+            {!dueTasks.length && <p style={{ color:C.textDim,fontSize:12 }}>All caught up.</p>}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   SCHEDULE
+   ============================================================ */
+function ApptModal({ open, onClose, initial, dateHint }){
+  const { addAppt, updateAppt, delAppt } = useApp();
+  const blank={ customer:'',vehicle:'',service:'basic',price:SERVICES.basic.price,date:dateHint||TODAY,time:'09:00',address:'',assignedTo:'habib',status:'scheduled',notes:'' };
+  const [f,setF]=useState(initial||blank);
+  useEffect(()=>{ setF(initial||{...blank,date:dateHint||TODAY}); },[initial,dateHint,open]);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{ if(!f.customer){return;} initial?updateAppt(initial.id,f):addAppt(f); onClose(); };
+  return (
+    <Modal open={open} onClose={onClose} title={initial?'Edit Appointment':'New Appointment'}
+      footer={<>
+        {initial && <Btn variant="danger" icon="trash" onClick={()=>{delAppt(initial.id);onClose();}} style={{ marginRight:'auto' }}>Delete</Btn>}
+        <Btn variant="dark" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={save}>{initial?'Save':'Schedule'}</Btn>
+      </>}>
+      <Field label="Customer"><input value={f.customer} onChange={e=>set('customer',e.target.value)} placeholder="Customer name"/></Field>
+      <Field label="Vehicle"><input value={f.vehicle} onChange={e=>set('vehicle',e.target.value)} placeholder="2022 BMW M3"/></Field>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
+        <Field label="Service">
+          <select value={f.service} onChange={e=>{const s=e.target.value;set('service',s);set('price',SERVICES[s].price);}}>
+            {Object.entries(SERVICES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Price"><input type="number" value={f.price} onChange={e=>set('price',+e.target.value)}/></Field>
+      </div>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
+        <Field label="Date"><input type="date" value={f.date} onChange={e=>set('date',e.target.value)}/></Field>
+        <Field label="Time"><input type="time" value={f.time} onChange={e=>set('time',e.target.value)}/></Field>
+      </div>
+      <Field label="Address"><input value={f.address} onChange={e=>set('address',e.target.value)} placeholder="Service address"/></Field>
+      <Field label="Assigned To">
+        <select value={f.assignedTo} onChange={e=>set('assignedTo',e.target.value)}>
+          {TEAM.map(t=><option key={t.id} value={t.id}>{t.name} — {t.role}</option>)}
+        </select>
+      </Field>
+      <Field label="Notes"><textarea rows={2} value={f.notes} onChange={e=>set('notes',e.target.value)} placeholder="Special instructions..."/></Field>
+    </Modal>
+  );
+}
+
+function Schedule(){
+  const { appts } = useApp();
+  const [view,setView]=useState('month');
+  const [cursor,setCursor]=useState(new Date('2026-06-01T00:00:00'));
+  const [modal,setModal]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [dateHint,setDateHint]=useState(TODAY);
+
+  const openNew=(d)=>{ setEditing(null); setDateHint(d||TODAY); setModal(true); };
+  const openEdit=(a)=>{ setEditing(a); setModal(true); };
+
+  const monthName=cursor.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+  const nav=(n)=>{ const d=new Date(cursor); if(view==='month')d.setMonth(d.getMonth()+n); else if(view==='week')d.setDate(d.getDate()+7*n); else d.setDate(d.getDate()+n); setCursor(d); };
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Schedule" sub="Drag-free calendar · color-coded by service"
+        actions={<Btn icon="plus" onClick={()=>openNew()}>New Appointment</Btn>}/>
+
+      <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,flexWrap:'wrap',gap:12 }}>
+        <div style={{ display:'flex',alignItems:'center',gap:8 }}>
+          <button onClick={()=>nav(-1)} style={{ width:34,height:34,borderRadius:9,background:C.bg2,border:`1px solid ${C.border}`,display:'grid',placeItems:'center',color:C.text }}><Icon name="chevL" size={16}/></button>
+          <button onClick={()=>nav(1)} style={{ width:34,height:34,borderRadius:9,background:C.bg2,border:`1px solid ${C.border}`,display:'grid',placeItems:'center',color:C.text }}><Icon name="chevR" size={16}/></button>
+          <h2 style={{ fontSize:18,fontWeight:700,marginLeft:6 }}>
+            {view==='month'?monthName:view==='week'?'Week of '+fmtDate(iso(startOfWeek(cursor)),{month:'short',day:'numeric'}):cursor.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}
+          </h2>
+          <button onClick={()=>setCursor(new Date('2026-06-01T00:00:00'))} style={{ fontSize:12,color:C.cyan,fontWeight:600,marginLeft:8 }}>Today</button>
+        </div>
+        <div style={{ display:'flex',background:C.bg2,borderRadius:10,padding:4,border:`1px solid ${C.border}` }}>
+          {['month','week','day'].map(v=>(
+            <button key={v} onClick={()=>setView(v)} style={{ padding:'7px 16px',borderRadius:7,fontSize:13,fontWeight:600,textTransform:'capitalize',
+              background:view===v?'linear-gradient(135deg,#1fc56a,#e0b73c)':'transparent', color:view===v?'#06090c':C.textDim }}>{v}</button>
+          ))}
+        </div>
+      </div>
+
+      {view==='month' && <MonthView cursor={cursor} appts={appts} onDay={openNew} onAppt={openEdit}/>}
+      {view==='week' && <WeekView cursor={cursor} appts={appts} onAppt={openEdit} onSlot={openNew}/>}
+      {view==='day' && <DayView cursor={cursor} appts={appts} onAppt={openEdit} onSlot={openNew}/>}
+
+      {/* Service legend */}
+      <div style={{ display:'flex',flexWrap:'wrap',gap:14,marginTop:16,padding:'12px 16px',background:C.panel,borderRadius:12,border:`1px solid ${C.border}` }}>
+        {Object.entries(SERVICES).map(([k,v])=>(
+          <span key={k} style={{ display:'inline-flex',alignItems:'center',gap:6,fontSize:12,color:C.textDim }}>
+            <span style={{ width:11,height:11,borderRadius:3,background:v.color }}/>{v.label}
+          </span>
+        ))}
+      </div>
+
+      <ApptModal open={modal} onClose={()=>setModal(false)} initial={editing} dateHint={dateHint}/>
+    </div>
+  );
+}
+
+function MonthView({ cursor, appts, onDay, onAppt }){
+  const y=cursor.getFullYear(), m=cursor.getMonth();
+  const first=new Date(y,m,1).getDay();
+  const days=new Date(y,m+1,0).getDate();
+  const cells=[];
+  for(let i=0;i<42;i++){ const dn=i-first+1;
+    if(dn>0&&dn<=days){ const ds=`${y}-${pad2(m+1)}-${pad2(dn)}`;
+      cells.push({ dn, ds, list:appts.filter(a=>a.date===ds).sort((a,b)=>a.time.localeCompare(b.time)) }); }
+    else cells.push({ dn:null }); }
+  return (
+    <Card pad={0} style={{ overflow:'hidden' }}>
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(7,1fr)' }}>
+        {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>(
+          <div key={d} style={{ padding:'10px 0',textAlign:'center',fontSize:11.5,fontWeight:700,
+            color:C.textDim,letterSpacing:.5,borderBottom:`1px solid ${C.border}` }}>{d}</div>
+        ))}
+        {cells.map((c,i)=>{
+          const isToday=c.ds===TODAY;
+          return (
+            <div key={i} onClick={()=>c.dn&&onDay(c.ds)} style={{ minHeight:104,padding:6,
+              borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
+              background:isToday?'rgba(31,197,106,0.07)':'transparent',cursor:c.dn?'pointer':'default',
+              transition:'background .15s' }}
+              onMouseEnter={e=>c.dn&&(e.currentTarget.style.background='rgba(31,197,106,0.1)')}
+              onMouseLeave={e=>e.currentTarget.style.background=isToday?'rgba(31,197,106,0.07)':'transparent'}>
+              {c.dn && (
+                <>
+                  <div style={{ fontSize:12.5,fontWeight:isToday?800:600,color:isToday?C.cyan:C.textDim,
+                    marginBottom:4,display:'flex',alignItems:'center',gap:5 }}>
+                    {isToday && <span style={{ width:6,height:6,borderRadius:'50%',background:C.cyan }}/>}{c.dn}
+                  </div>
+                  <div style={{ display:'flex',flexDirection:'column',gap:3 }}>
+                    {c.list.slice(0,3).map(a=>(
+                      <div key={a.id} onClick={e=>{e.stopPropagation();onAppt(a);}}
+                        style={{ fontSize:10.5,padding:'2px 6px',borderRadius:5,
+                        background:`${SERVICES[a.service].color}22`,color:SERVICES[a.service].color,
+                        borderLeft:`2px solid ${SERVICES[a.service].color}`,fontWeight:600,
+                        whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis' }}>
+                        {fmtTime(a.time).replace(':00','')} {a.customer.split(' ')[0]}
+                      </div>
+                    ))}
+                    {c.list.length>3 && <div style={{ fontSize:10,color:C.textDim,paddingLeft:6 }}>+{c.list.length-3} more</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function WeekView({ cursor, appts, onAppt, onSlot }){
+  const start=startOfWeek(cursor);
+  const days=[...Array(7)].map((_,i)=>{ const d=new Date(start); d.setDate(d.getDate()+i); return d; });
+  const hours=[...Array(11)].map((_,i)=>i+7); // 7am - 5pm
+  return (
+    <Card pad={0} style={{ overflow:'auto' }}>
+      <div style={{ display:'grid',gridTemplateColumns:'56px repeat(7,1fr)',minWidth:760 }}>
+        <div style={{ borderBottom:`1px solid ${C.border}` }}/>
+        {days.map((d,i)=>{ const isT=iso(d)===TODAY;
+          return <div key={i} style={{ padding:'10px 4px',textAlign:'center',borderBottom:`1px solid ${C.border}`,borderLeft:`1px solid ${C.border}` }}>
+            <div style={{ fontSize:11,color:C.textDim }}>{d.toLocaleDateString('en-US',{weekday:'short'})}</div>
+            <div style={{ fontSize:16,fontWeight:isT?800:600,color:isT?C.cyan:C.text }}>{d.getDate()}</div>
+          </div>; })}
+        {hours.map(h=>(
+          <React.Fragment key={h}>
+            <div style={{ fontSize:10.5,color:C.textMuted,textAlign:'right',paddingRight:6,paddingTop:4,borderBottom:`1px solid ${C.border}`,height:58 }}>{fmtTime(pad2(h)+':00').replace(':00','')}</div>
+            {days.map((d,di)=>{ const ds=iso(d);
+              const slot=appts.filter(a=>a.date===ds && +a.time.split(':')[0]===h);
+              return <div key={di} onClick={()=>onSlot(ds)} style={{ borderLeft:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:2,cursor:'pointer',position:'relative' }}>
+                {slot.map(a=>(
+                  <div key={a.id} onClick={e=>{e.stopPropagation();onAppt(a);}}
+                    style={{ fontSize:10,padding:'3px 5px',borderRadius:5,marginBottom:2,
+                    background:`${SERVICES[a.service].color}26`,color:SERVICES[a.service].color,
+                    borderLeft:`2px solid ${SERVICES[a.service].color}`,fontWeight:600,overflow:'hidden' }}>
+                    {a.customer.split(' ')[0]} · {fmt$(a.price)}
+                  </div>
+                ))}
+              </div>; })}
+          </React.Fragment>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function DayView({ cursor, appts, onAppt, onSlot }){
+  const ds=iso(cursor);
+  const list=appts.filter(a=>a.date===ds).sort((a,b)=>a.time.localeCompare(b.time));
+  const hours=[...Array(12)].map((_,i)=>i+7);
+  return (
+    <Card pad={0} style={{ overflow:'hidden' }}>
+      {hours.map(h=>{ const slot=list.filter(a=>+a.time.split(':')[0]===h);
+        return (
+          <div key={h} onClick={()=>onSlot(ds)} style={{ display:'flex',borderBottom:`1px solid ${C.border}`,minHeight:62,cursor:'pointer' }}>
+            <div style={{ width:72,padding:'8px 12px',fontSize:12,color:C.textMuted,textAlign:'right',borderRight:`1px solid ${C.border}` }}>{fmtTime(pad2(h)+':00').replace(':00','')}</div>
+            <div style={{ flex:1,padding:6,display:'flex',gap:8,flexWrap:'wrap' }}>
+              {slot.map(a=>{ const s=SERVICES[a.service];
+                return <div key={a.id} onClick={e=>{e.stopPropagation();onAppt(a);}}
+                  style={{ flex:1,minWidth:200,padding:'10px 14px',borderRadius:10,background:`${s.color}1a`,
+                  borderLeft:`3px solid ${s.color}`,display:'flex',alignItems:'center',gap:12 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:14,fontWeight:700 }}>{a.customer} <span style={{ color:s.color }}>· {s.label}</span></div>
+                    <div style={{ fontSize:12,color:C.textDim }}>{a.vehicle} · {a.address}</div>
+                  </div>
+                  <div style={{ fontSize:15,fontWeight:800,color:C.green }}>{fmt$(a.price)}</div>
+                  <Avatar id={a.assignedTo} size={30}/>
+                </div>; })}
+            </div>
+          </div>
+        ); })}
+    </Card>
+  );
+}
+
+/* ============================================================
+   TASKS
+   ============================================================ */
+function TaskModal({ open, onClose, initial }){
+  const { addTask, updateTask, delTask, addComment } = useApp();
+  const blank={ title:'',desc:'',priority:'medium',due:TODAY,assignedTo:'habib',status:'not-started' };
+  const [f,setF]=useState(initial||blank);
+  const [cm,setCm]=useState('');
+  useEffect(()=>{ setF(initial||blank); setCm(''); },[initial,open]);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{ if(!f.title)return; initial?updateTask(initial.id,f):addTask(f); onClose(); };
+  return (
+    <Modal open={open} onClose={onClose} title={initial?'Task Details':'New Task'} width={560}
+      footer={<>
+        {initial && <Btn variant="danger" icon="trash" onClick={()=>{delTask(initial.id);onClose();}} style={{ marginRight:'auto' }}>Delete</Btn>}
+        <Btn variant="dark" onClick={onClose}>Cancel</Btn>
+        <Btn onClick={save}>{initial?'Save':'Create'}</Btn>
+      </>}>
+      <Field label="Title"><input value={f.title} onChange={e=>set('title',e.target.value)} placeholder="What needs doing?"/></Field>
+      <Field label="Description"><textarea rows={2} value={f.desc} onChange={e=>set('desc',e.target.value)} placeholder="Details..."/></Field>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
+        <Field label="Priority">
+          <select value={f.priority} onChange={e=>set('priority',e.target.value)}>
+            {Object.entries(PRIORITY).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Status">
+          <select value={f.status} onChange={e=>set('status',e.target.value)}>
+            {TASK_COLS.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
+        <Field label="Due Date"><input type="date" value={f.due} onChange={e=>set('due',e.target.value)}/></Field>
+        <Field label="Assigned To">
+          <select value={f.assignedTo} onChange={e=>set('assignedTo',e.target.value)}>
+            {TEAM.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      {initial && (
+        <div style={{ marginTop:8 }}>
+          <label>Comments</label>
+          <div style={{ display:'flex',flexDirection:'column',gap:8,marginBottom:10 }}>
+            {initial.comments.map((c,i)=>(
+              <div key={i} style={{ display:'flex',gap:8,alignItems:'flex-start' }}>
+                <Avatar id={c.by} size={26}/>
+                <div style={{ background:C.bg3,borderRadius:9,padding:'7px 11px',fontSize:13,flex:1 }}>
+                  <span style={{ fontWeight:700,color:teamById(c.by).color }}>{teamById(c.by).name}</span>
+                  <span style={{ color:C.textMuted,fontSize:11,marginLeft:6 }}>{relTime(c.ts)}</span>
+                  <div style={{ marginTop:2 }}>{c.text}</div>
+                </div>
+              </div>
+            ))}
+            {!initial.comments.length && <p style={{ fontSize:12,color:C.textMuted }}>No comments yet.</p>}
+          </div>
+          <div style={{ display:'flex',gap:8 }}>
+            <input value={cm} onChange={e=>setCm(e.target.value)} placeholder="Add a comment..." onKeyDown={e=>{if(e.key==='Enter'&&cm.trim()){addComment(initial.id,cm.trim());setCm('');}}}/>
+            <Btn variant="soft" onClick={()=>{if(cm.trim()){addComment(initial.id,cm.trim());setCm('');}}}>Post</Btn>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function TaskCard({ task, onClick, onDragStart, onDragEnd, dragging }){
+  const m=teamById(task.assignedTo); const p=PRIORITY[task.priority];
+  const overdue=task.due<TODAY && task.status!=='completed';
+  return (
+    <div draggable onClick={onClick}
+      onDragStart={e=>onDragStart(e,task.id)} onDragEnd={onDragEnd}
+      style={{ background:C.bg2,border:`1px solid ${C.border}`,borderRadius:11,padding:13,
+        opacity:dragging?0.35:1,transition:'opacity .15s,transform .15s,border-color .15s',
+        borderLeft:`3px solid ${p.color}` }}
+      onMouseEnter={e=>e.currentTarget.style.borderColor=C.borderHi}
+      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+      <div style={{ display:'flex',justifyContent:'space-between',gap:8,marginBottom:7 }}>
+        <span style={{ fontSize:13.5,fontWeight:600,lineHeight:1.3 }} className="clamp2">{task.title}</span>
+        <Badge color={p.color}>{p.label}</Badge>
+      </div>
+      {task.desc && <p style={{ fontSize:12,color:C.textDim,marginBottom:9 }} className="clamp2">{task.desc}</p>}
+      <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}>
+        <span style={{ fontSize:11.5,color:overdue?C.red:C.textDim,display:'inline-flex',alignItems:'center',gap:4 }}>
+          <Icon name="clock" size={12} color={overdue?C.red:C.textDim}/>{fmtDate(task.due)}
+        </span>
+        <div style={{ display:'flex',alignItems:'center',gap:6 }}>
+          {task.comments.length>0 && <span style={{ fontSize:11,color:C.textDim,display:'inline-flex',alignItems:'center',gap:3 }}><Icon name="message" size={12}/>{task.comments.length}</span>}
+          <Avatar id={task.assignedTo} size={24}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Tasks(){
+  const { tasks, updateTask } = useApp();
+  const [view,setView]=useState('kanban');
+  const [modal,setModal]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [drag,setDrag]=useState(null);
+  const [over,setOver]=useState(null);
+  const [filterWho,setFilterWho]=useState('all');
+
+  const shown=tasks.filter(t=>filterWho==='all'||t.assignedTo===filterWho);
+  const openNew=()=>{ setEditing(null); setModal(true); };
+  const openEdit=(t)=>{ setEditing(t); setModal(true); };
+
+  const onDragStart=(e,id)=>{ setDrag(id); e.dataTransfer.effectAllowed='move'; };
+  const onDrop=(status)=>{ if(drag){ updateTask(drag,{status}); } setDrag(null); setOver(null); };
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1,display:'flex',flexDirection:'column' }}>
+      <PageHead title="Tasks" sub="Shared board · drag cards between columns"
+        actions={<Btn icon="plus" onClick={openNew}>New Task</Btn>}/>
+
+      <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:12 }}>
+        <div style={{ display:'flex',gap:8,alignItems:'center' }}>
+          <span style={{ fontSize:12,color:C.textDim }}>Assignee:</span>
+          <button onClick={()=>setFilterWho('all')} style={{ padding:'6px 12px',borderRadius:8,fontSize:12.5,fontWeight:600,
+            background:filterWho==='all'?C.cyanDim:C.bg2,color:filterWho==='all'?C.cyan:C.textDim,border:`1px solid ${C.border}` }}>All</button>
+          {TEAM.map(t=>(
+            <button key={t.id} onClick={()=>setFilterWho(t.id)} style={{ padding:'5px 10px',borderRadius:8,fontSize:12.5,fontWeight:600,
+              display:'inline-flex',alignItems:'center',gap:6,
+              background:filterWho===t.id?`${t.color}22`:C.bg2,color:filterWho===t.id?t.color:C.textDim,border:`1px solid ${C.border}` }}>
+              <Avatar id={t.id} size={20}/>{t.name}
+            </button>
+          ))}
+        </div>
+        <div style={{ display:'flex',background:C.bg2,borderRadius:10,padding:4,border:`1px solid ${C.border}` }}>
+          {['kanban','list'].map(v=>(
+            <button key={v} onClick={()=>setView(v)} style={{ padding:'7px 16px',borderRadius:7,fontSize:13,fontWeight:600,textTransform:'capitalize',
+              background:view===v?'linear-gradient(135deg,#1fc56a,#e0b73c)':'transparent',color:view===v?'#06090c':C.textDim }}>{v}</button>
+          ))}
+        </div>
+      </div>
+
+      {view==='kanban' ? (
+        <div style={{ display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,flex:1,minHeight:0 }} className="grid-resp">
+          {TASK_COLS.map(col=>{
+            const list=shown.filter(t=>t.status===col.id);
+            return (
+              <div key={col.id}
+                onDragOver={e=>{e.preventDefault();setOver(col.id);}}
+                onDragLeave={()=>setOver(o=>o===col.id?null:o)}
+                onDrop={()=>onDrop(col.id)}
+                style={{ display:'flex',flexDirection:'column',background:over===col.id?'rgba(31,197,106,0.08)':C.panel,
+                  border:`1px solid ${over===col.id?C.borderHi:C.border}`,borderRadius:14,padding:12,
+                  transition:'background .15s,border-color .15s',minHeight:200 }}>
+                <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${C.border}` }}>
+                  <span style={{ width:9,height:9,borderRadius:'50%',background:col.color,boxShadow:`0 0 8px ${col.color}` }}/>
+                  <span style={{ fontSize:13.5,fontWeight:700 }}>{col.label}</span>
+                  <span style={{ marginLeft:'auto',fontSize:12,fontWeight:700,color:C.textDim,background:C.bg3,padding:'2px 9px',borderRadius:20 }}>{list.length}</span>
+                </div>
+                <div style={{ display:'flex',flexDirection:'column',gap:10,flex:1,overflowY:'auto' }}>
+                  {list.map(t=><TaskCard key={t.id} task={t} dragging={drag===t.id} onClick={()=>openEdit(t)} onDragStart={onDragStart} onDragEnd={()=>setDrag(null)}/>)}
+                  {!list.length && <div style={{ fontSize:12,color:C.textMuted,textAlign:'center',padding:'20px 0',border:`1px dashed ${C.border}`,borderRadius:10 }}>Drop here</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <Card pad={0} style={{ overflow:'hidden' }}>
+          {shown.map((t,i)=>{ const p=PRIORITY[t.priority]; const col=TASK_COLS.find(c=>c.id===t.status); const overdue=t.due<TODAY&&t.status!=='completed';
+            return (
+              <div key={t.id} onClick={()=>openEdit(t)} style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 18px',
+                borderBottom:i<shown.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',borderLeft:`3px solid ${p.color}` }}
+                onMouseEnter={e=>e.currentTarget.style.background=C.bg2} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <span style={{ width:9,height:9,borderRadius:'50%',background:col.color,flex:'0 0 auto' }}/>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:14,fontWeight:600 }} className="clamp1">{t.title}</div>
+                  {t.desc && <div style={{ fontSize:12,color:C.textDim }} className="clamp1">{t.desc}</div>}
+                </div>
+                <Badge color={p.color}>{p.label}</Badge>
+                <span style={{ fontSize:12,color:overdue?C.red:C.textDim,minWidth:64 }}>{fmtDate(t.due)}</span>
+                <Avatar id={t.assignedTo} size={28}/>
+              </div>
+            ); })}
+        </Card>
+      )}
+
+      <TaskModal open={modal} onClose={()=>setModal(false)} initial={editing}/>
+    </div>
+  );
+}
+
+/* ============================================================
+   FINANCE
+   ============================================================ */
+function Finance(){
+  const { appts } = useApp();
+  const [range,setRange]=useState('month');
+  const live=appts.filter(a=>a.status!=='cancelled');
+  const bd=serviceBreakdown(live);
+  const monthTotal=bd.reduce((s,x)=>s+x.value,0);
+  const priced=live.filter(a=>a.price>0);
+  const avgTicket=priced.length?Math.round(priced.reduce((s,a)=>s+a.price,0)/priced.length):null;
+  const now=new Date(NOW);
+  const mStart=localISO(new Date(now.getFullYear(),now.getMonth(),1));
+  const qStart=localISO(new Date(now.getFullYear(),Math.floor(now.getMonth()/3)*3,1));
+  const yStart=localISO(new Date(now.getFullYear(),0,1));
+  const ws=localISO(startOfWeek(now));
+  const stat={ day:sumRange(live,TODAY,TODAY), week:sumRange(live,ws,TODAY), month:sumRange(live,mStart,TODAY), quarter:sumRange(live,qStart,TODAY), year:sumRange(live,yStart,TODAY) };
+  const monthly=revMonthly(live);
+  const jobsThisMonth=live.filter(a=>a.date>=mStart&&a.date<=TODAY).length;
+  const ceramicRev=live.filter(a=>a.service==='ceramic'&&a.date>=mStart&&a.date<=TODAY).reduce((s,a)=>s+(a.price||0),0);
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Finance" sub="Revenue from booked jobs (GoHighLevel)"/>
+
+      {/* Period selector + totals */}
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
+        {[
+          { k:'day',l:'Today',v:stat.day,c:C.cyan },
+          { k:'week',l:'This Week',v:stat.week,c:C.cyanBright },
+          { k:'month',l:'This Month',v:stat.month,c:C.green },
+          { k:'quarter',l:'Quarter',v:stat.quarter,c:C.gold },
+          { k:'year',l:'Year',v:stat.year,c:C.purple },
+        ].map(x=>(
+          <Card key={x.k} pad={16} hover onClick={()=>setRange(x.k)}
+            style={{ borderColor:range===x.k?x.c+'66':C.border,background:range===x.k?`${x.c}10`:C.panel }}>
+            <div style={{ fontSize:11.5,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase' }}>{x.l}</div>
+            <div style={{ fontSize:24,fontWeight:800,color:range===x.k?x.c:C.text,marginTop:6 }}>{fmt$(x.v)}</div>
+          </Card>
+        ))}
+      </div>
+
+      <div style={{ display:'grid',gridTemplateColumns:'1.5fr 1fr',gap:16,marginBottom:16 }} className="grid-resp">
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Monthly Revenue</h3>
+          <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>Last 6 months from booked jobs</p>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={monthly} margin={{ top:5,right:8,left:-18,bottom:0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="month" tick={{ fontSize:11 }} axisLine={false} tickLine={false}/>
+              <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+v/1000+'k'}/>
+              <RTooltip content={<ChartTip money/>} cursor={{ fill:'rgba(31,197,106,0.06)' }}/>
+              <Bar dataKey="revenue" radius={[5,5,0,0]} name="Revenue">
+                {monthly.map((e,i)=><Cell key={i} fill={C.green}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>Revenue by Service</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={bd} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} stroke="none">
+                {bd.map((e,i)=><Cell key={i} fill={e.color}/>)}
+              </Pie>
+              <RTooltip content={<ChartTip money/>}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display:'flex',flexDirection:'column',gap:7,marginTop:10 }}>
+            {bd.map(e=>(
+              <div key={e.key} style={{ display:'flex',alignItems:'center',gap:8,fontSize:12.5 }}>
+                <span style={{ width:9,height:9,borderRadius:2,background:e.color }}/>
+                <span style={{ flex:1,color:C.textDim }}>{e.name}</span>
+                <span style={{ fontWeight:700 }}>{fmt$(e.value)}</span>
+                <span style={{ color:C.textMuted,minWidth:34,textAlign:'right' }}>{pct(e.value,monthTotal)}%</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:16 }} className="grid-resp">
+        <KPI label="Avg Ticket" value={avgTicket!=null?fmt$(avgTicket):BLANK} icon="chart" color={C.cyan}/>
+        <KPI label="Customer LTV" value={BLANK} icon="users" color={C.purple} sub="needs setup"/>
+        <KPI label="Total Jobs (mo)" value={jobsThisMonth} icon="car" color={C.gold}/>
+        <KPI label="Ceramic Revenue (mo)" value={fmt$(ceramicRev)} icon="star" color={C.pink} sub={monthTotal?pct(ceramicRev,monthTotal)+'% of total':''}/>
+        <KPI label="Outstanding" value={BLANK} icon="alert" color={C.red} sub="invoices not connected"/>
+      </div>
+
+      <Card pad={0} style={{ overflow:'hidden' }}>
+        <div style={{ padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center' }}>
+          <h3 style={{ fontSize:15,fontWeight:700 }}>Invoices</h3>
+        </div>
+        <div style={{ padding:'30px 20px',textAlign:'center',color:C.textDim,fontSize:13 }}>
+          Invoices aren't connected yet. We'll wire GoHighLevel invoices/payments here when ready.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ============================================================
+   GOALS
+   ============================================================ */
+function GoalModal({ open, onClose }){
+  const { addGoal } = useApp();
+  const [f,setF]=useState({ cat:'business',label:'',cur:0,target:100,unit:'',due:'2026-12-31',owner:'both' });
+  useEffect(()=>{ if(open)setF({ cat:'business',label:'',cur:0,target:100,unit:'',due:'2026-12-31',owner:'both' }); },[open]);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  return (
+    <Modal open={open} onClose={onClose} title="New Goal"
+      footer={<><Btn variant="dark" onClick={onClose}>Cancel</Btn><Btn onClick={()=>{ if(f.label){addGoal(f);onClose();} }}>Add Goal</Btn></>}>
+      <Field label="Goal Name"><input value={f.label} onChange={e=>set('label',e.target.value)} placeholder="e.g. Monthly Revenue"/></Field>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
+        <Field label="Category">
+          <select value={f.cat} onChange={e=>set('cat',e.target.value)}>
+            <option value="business">Business</option><option value="habib">Habib (Personal)</option><option value="partner">Ryan (Personal)</option>
+          </select>
+        </Field>
+        <Field label="Unit">
+          <select value={f.unit} onChange={e=>set('unit',e.target.value)}>
+            <option value="">Count</option><option value="$">Dollars ($)</option><option value="lb">Pounds (lb)</option>
+          </select>
+        </Field>
+      </div>
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
+        <Field label="Current"><input type="number" value={f.cur} onChange={e=>set('cur',+e.target.value)}/></Field>
+        <Field label="Target"><input type="number" value={f.target} onChange={e=>set('target',+e.target.value)}/></Field>
+      </div>
+      <Field label="Target Date"><input type="date" value={f.due} onChange={e=>set('due',e.target.value)}/></Field>
+    </Modal>
+  );
+}
+
+function GoalCard({ g }){
+  const { updateGoal, delGoal } = useApp();
+  const p=pct(g.cur,g.target);
+  const color=p>=100?C.green:p>=66?C.cyan:p>=33?C.gold:C.orange;
+  const fmt=v=>g.unit==='$'?fmt$(v):v.toLocaleString()+(g.unit?' '+g.unit:'');
+  const remaining=Math.max(g.target-g.cur,0);
+  return (
+    <Card pad={18} hover>
+      <div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14 }}>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:14.5,fontWeight:700 }}>{g.label}</div>
+          <div style={{ fontSize:11.5,color:C.textDim,marginTop:3,display:'inline-flex',alignItems:'center',gap:5 }}>
+            <Icon name="clock" size={12}/>Due {fmtDate(g.due,{month:'short',day:'numeric',year:'numeric'})}
+          </div>
+        </div>
+        <Ring value={p} size={56} stroke={5} color={color}/>
+      </div>
+      <div style={{ display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:8 }}>
+        <span style={{ fontSize:20,fontWeight:800,color }}>{fmt(g.cur)}</span>
+        <span style={{ fontSize:13,color:C.textDim }}>of {fmt(g.target)}</span>
+      </div>
+      <ProgressBar value={g.cur} max={g.target} color={color}/>
+      <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:12 }}>
+        <span style={{ fontSize:11.5,color:C.textDim }}>{remaining>0?fmt(remaining)+' to go':'Goal reached!'}</span>
+        <div style={{ display:'flex',gap:4 }}>
+          <button onClick={()=>updateGoal(g.id,{ cur:Math.round(g.cur+g.target*0.05) })}
+            style={{ width:28,height:28,borderRadius:7,background:C.bg3,color:C.green,display:'grid',placeItems:'center' }}><Icon name="up" size={14}/></button>
+          <button onClick={()=>delGoal(g.id)}
+            style={{ width:28,height:28,borderRadius:7,background:C.bg3,color:C.textDim,display:'grid',placeItems:'center' }}><Icon name="trash" size={14}/></button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function Goals(){
+  const { goals } = useApp();
+  const [modal,setModal]=useState(false);
+  const groups=[
+    { key:'business', title:'Business Goals', icon:'trophy', color:C.gold },
+    { key:'habib', title:'Habib · Personal', icon:'target', color:C.cyan },
+    { key:'partner', title:'Ryan · Personal', icon:'target', color:C.purple },
+  ];
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Goals" sub="Business targets & personal milestones"
+        actions={<Btn icon="plus" onClick={()=>setModal(true)}>New Goal</Btn>}/>
+      {groups.map(grp=>{
+        const list=goals.filter(g=>g.cat===grp.key);
+        if(!list.length) return null;
+        return (
+          <div key={grp.key} style={{ marginBottom:26 }}>
+            <div style={{ display:'flex',alignItems:'center',gap:9,marginBottom:14 }}>
+              <div style={{ width:32,height:32,borderRadius:9,background:`${grp.color}1c`,display:'grid',placeItems:'center' }}>
+                <Icon name={grp.icon} size={17} color={grp.color}/>
+              </div>
+              <h2 style={{ fontSize:16,fontWeight:700 }}>{grp.title}</h2>
+              <span style={{ fontSize:12,color:C.textDim }}>· {list.length} goals</span>
+            </div>
+            <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:14 }} className="grid-resp">
+              {list.map(g=><GoalCard key={g.id} g={g}/>)}
+            </div>
+          </div>
+        );
+      })}
+      <GoalModal open={modal} onClose={()=>setModal(false)}/>
+    </div>
+  );
+}
+
+/* ============================================================
+   TEAM
+   ============================================================ */
+function Team(){
+  const { messages, announce, sendMessage, addAnnounce, user } = useApp();
+  const [text,setText]=useState('');
+  const [annOpen,setAnnOpen]=useState(false);
+  const [annT,setAnnT]=useState(''); const [annB,setAnnB]=useState('');
+  const endRef=useRef(null);
+  useEffect(()=>{ endRef.current && endRef.current.scrollIntoView({ behavior:'smooth' }); },[messages]);
+  const send=()=>{ if(text.trim()){ sendMessage(text.trim()); setText(''); } };
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Team" sub="Partners-only channel · announcements & updates"
+        actions={<Btn icon="plus" variant="ghost" onClick={()=>setAnnOpen(true)}>Announcement</Btn>}/>
+
+      <div style={{ display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:16 }} className="grid-resp">
+        {/* Chat */}
+        <Card pad={0} style={{ display:'flex',flexDirection:'column',height:560 }}>
+          <div style={{ padding:'14px 18px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10 }}>
+            <span className="dot-live"/>
+            <h3 style={{ fontSize:15,fontWeight:700 }}>Team Chat</h3>
+            <div style={{ marginLeft:'auto',display:'flex' }}>
+              {TEAM.map((t,i)=><div key={t.id} style={{ marginLeft:i?-8:0 }}><Avatar id={t.id} size={26} ring/></div>)}
+            </div>
+          </div>
+          <div style={{ flex:1,overflowY:'auto',padding:18,display:'flex',flexDirection:'column',gap:14 }}>
+            {messages.map(m=>{ const me=m.by===user; const t=teamById(m.by);
+              return (
+                <div key={m.id} style={{ display:'flex',gap:10,flexDirection:me?'row-reverse':'row' }}>
+                  <Avatar id={m.by} size={32}/>
+                  <div style={{ maxWidth:'72%' }}>
+                    <div style={{ display:'flex',gap:7,alignItems:'baseline',marginBottom:3,flexDirection:me?'row-reverse':'row' }}>
+                      <span style={{ fontSize:12.5,fontWeight:700,color:t.color }}>{t.name}</span>
+                      <span style={{ fontSize:10.5,color:C.textMuted }}>{relTime(m.ts)}</span>
+                    </div>
+                    <div style={{ background:me?'linear-gradient(135deg,#1fc56a22,#e0b73c22)':C.bg2,
+                      border:`1px solid ${me?C.borderHi:C.border}`,borderRadius:12,
+                      borderTopLeftRadius:me?12:4,borderTopRightRadius:me?4:12,
+                      padding:'9px 13px',fontSize:13.5,lineHeight:1.45 }}>{m.text}</div>
+                  </div>
+                </div>
+              ); })}
+            <div ref={endRef}/>
+          </div>
+          <div style={{ padding:14,borderTop:`1px solid ${C.border}`,display:'flex',gap:10 }}>
+            <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Message your team..."/>
+            <Btn icon="zap" onClick={send}>Send</Btn>
+          </div>
+        </Card>
+
+        {/* Announcements */}
+        <Card pad={20} style={{ height:560,overflowY:'auto' }}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:16 }}>Announcements</h3>
+          <div style={{ display:'flex',flexDirection:'column',gap:12 }}>
+            {announce.sort((a,b)=>b.pinned-a.pinned).map(a=>(
+              <div key={a.id} style={{ background:C.bg2,borderRadius:12,padding:14,
+                border:`1px solid ${a.pinned?C.gold+'44':C.border}`,borderLeft:`3px solid ${a.pinned?C.gold:C.cyan}` }}>
+                <div style={{ display:'flex',alignItems:'center',gap:7,marginBottom:6 }}>
+                  {a.pinned && <Icon name="pin" size={13} color={C.gold}/>}
+                  <span style={{ fontSize:14,fontWeight:700 }}>{a.title}</span>
+                </div>
+                <p style={{ fontSize:13,color:C.textDim,lineHeight:1.5,marginBottom:9 }}>{a.text}</p>
+                <div style={{ display:'flex',alignItems:'center',gap:7 }}>
+                  <Avatar id={a.by} size={22}/>
+                  <span style={{ fontSize:11.5,color:C.textMuted }}>{teamById(a.by).name} · {relTime(a.ts)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      <Modal open={annOpen} onClose={()=>setAnnOpen(false)} title="New Announcement"
+        footer={<><Btn variant="dark" onClick={()=>setAnnOpen(false)}>Cancel</Btn>
+          <Btn onClick={()=>{ if(annT.trim()){addAnnounce(annT,annB);setAnnT('');setAnnB('');setAnnOpen(false);} }}>Post</Btn></>}>
+        <Field label="Title"><input value={annT} onChange={e=>setAnnT(e.target.value)} placeholder="Announcement title"/></Field>
+        <Field label="Message"><textarea rows={4} value={annB} onChange={e=>setAnnB(e.target.value)} placeholder="What's the update?"/></Field>
+      </Modal>
+    </div>
+  );
+}
+
+/* ============================================================
+   NOTIFICATIONS
+   ============================================================ */
+function Notifications(){
+  const { notifs, markNotif, markAllNotifs, clearNotifs } = useApp();
+  const [filter,setFilter]=useState('all');
+  const types={
+    lead:{ color:C.gold,icon:'zap',label:'Lead' },
+    booking:{ color:C.green,icon:'calendar',label:'Booking' },
+    task:{ color:C.purple,icon:'check',label:'Task' },
+    followup:{ color:C.orange,icon:'phone',label:'Follow-up' },
+    goal:{ color:C.cyan,icon:'target',label:'Goal' },
+    invoice:{ color:C.red,icon:'dollar',label:'Invoice' },
+  };
+  const shown=notifs.filter(n=>filter==='all'||n.type===filter);
+  const unread=notifs.filter(n=>!n.read).length;
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Notifications" sub={`${unread} unread`}
+        actions={<><Btn variant="ghost" onClick={markAllNotifs}>Mark all read</Btn><Btn variant="dark" icon="trash" onClick={clearNotifs}>Clear</Btn></>}/>
+
+      <div style={{ display:'flex',gap:8,marginBottom:18,flexWrap:'wrap' }}>
+        <button onClick={()=>setFilter('all')} style={{ padding:'7px 14px',borderRadius:8,fontSize:13,fontWeight:600,
+          background:filter==='all'?C.cyanDim:C.bg2,color:filter==='all'?C.cyan:C.textDim,border:`1px solid ${C.border}` }}>All</button>
+        {Object.entries(types).map(([k,v])=>(
+          <button key={k} onClick={()=>setFilter(k)} style={{ padding:'7px 14px',borderRadius:8,fontSize:13,fontWeight:600,
+            display:'inline-flex',alignItems:'center',gap:6,
+            background:filter===k?`${v.color}22`:C.bg2,color:filter===k?v.color:C.textDim,border:`1px solid ${C.border}` }}>
+            <Icon name={v.icon} size={14}/>{v.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display:'flex',flexDirection:'column',gap:10,maxWidth:760 }}>
+        {shown.sort((a,b)=>b.ts-a.ts).map(n=>{ const t=types[n.type];
+          return (
+            <Card key={n.id} pad={15} hover onClick={()=>markNotif(n.id)}
+              style={{ display:'flex',gap:13,alignItems:'flex-start',
+                borderLeft:`3px solid ${n.read?C.border:t.color}`,opacity:n.read?0.65:1 }}>
+              <div style={{ width:38,height:38,borderRadius:11,background:`${t.color}1c`,display:'grid',placeItems:'center',flex:'0 0 auto' }}>
+                <Icon name={t.icon} size={18} color={t.color}/>
+              </div>
+              <div style={{ flex:1 }}>
+                <div style={{ display:'flex',alignItems:'center',gap:8 }}>
+                  <span style={{ fontSize:14,fontWeight:700 }}>{n.title}</span>
+                  {!n.read && <span style={{ width:7,height:7,borderRadius:'50%',background:t.color }}/>}
+                  <span style={{ marginLeft:'auto',fontSize:11.5,color:C.textMuted }}>{relTime(n.ts)}</span>
+                </div>
+                <p style={{ fontSize:13,color:C.textDim,marginTop:4,lineHeight:1.45 }}>{n.body}</p>
+              </div>
+            </Card>
+          ); })}
+        {!shown.length && <p style={{ color:C.textDim,textAlign:'center',padding:40 }}>No notifications.</p>}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   REPORTS
+   ============================================================ */
+function Reports(){
+  const { toast, appts, leads } = useApp();
+  const [from,setFrom]=useState(addDays(TODAY,-30));
+  const [to,setTo]=useState(TODAY);
+  const live=(appts||[]).filter(a=>a.status!=='cancelled');
+  const bd=serviceBreakdown(live);
+  const monthly=revMonthly(live);
+  const wonCount=(leads||[]).filter(l=>l.stage==='won').length;
+  const totalLeads=(leads||[]).length;
+  const closeRate=totalLeads?Math.round(wonCount/totalLeads*100)+'% close':BLANK;
+  const rangeRev=sumRange(live,from,to);
+  const reports=[
+    { title:'Revenue Report', desc:'Daily/weekly/monthly breakdown from booked jobs', icon:'dollar', color:C.green, stat:rangeRev>0?fmt$(rangeRev):BLANK },
+    { title:'Lead Conversion', desc:'Pipeline, sources & win rate analysis', icon:'zap', color:C.gold, stat:closeRate },
+    { title:'Service Performance', desc:'Revenue & margin by service category', icon:'chart', color:C.cyan, stat:bd.length?bd.length+' services':BLANK },
+    { title:'Customer Retention', desc:'Repeat rate, churn & lifetime value', icon:'users', color:C.purple, stat:BLANK },
+  ];
+  const lineData=monthly.map(m=>({ month:m.month, revenue:m.revenue }));
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Reports" sub="Generate & export business intelligence"/>
+
+      <Card pad={16} style={{ display:'flex',alignItems:'center',gap:14,marginBottom:18,flexWrap:'wrap' }}>
+        <Icon name="calendar" size={18} color={C.cyan}/>
+        <span style={{ fontSize:13,color:C.textDim,fontWeight:600 }}>Date Range:</span>
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{ width:'auto' }}/>
+        <span style={{ color:C.textDim }}>→</span>
+        <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{ width:'auto' }}/>
+        <div style={{ marginLeft:'auto',display:'flex',gap:10 }}>
+          <Btn variant="ghost" icon="download" onClick={()=>toast('Exported to PDF')}>PDF</Btn>
+          <Btn variant="soft" icon="download" onClick={()=>toast('Exported to Excel')}>Excel</Btn>
+        </div>
+      </Card>
+
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
+        {reports.map(r=>(
+          <Card key={r.title} pad={18} hover onClick={()=>toast(`Generating ${r.title}...`,'info')}>
+            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12 }}>
+              <div style={{ width:40,height:40,borderRadius:11,background:`${r.color}1c`,display:'grid',placeItems:'center' }}>
+                <Icon name={r.icon} size={19} color={r.color}/>
+              </div>
+              <span style={{ fontSize:15,fontWeight:800,color:r.color }}>{r.stat}</span>
+            </div>
+            <div style={{ fontSize:15,fontWeight:700,marginBottom:5 }}>{r.title}</div>
+            <p style={{ fontSize:12.5,color:C.textDim,lineHeight:1.45 }}>{r.desc}</p>
+            <div style={{ display:'flex',gap:8,marginTop:14 }}>
+              <Btn size="sm" variant="ghost" icon="download" onClick={e=>{e.stopPropagation();toast('Exported to PDF');}}>PDF</Btn>
+              <Btn size="sm" variant="dark" icon="download" onClick={e=>{e.stopPropagation();toast('Exported to Excel');}}>Excel</Btn>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:16 }} className="grid-resp">
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>Monthly Revenue</h3>
+          {lineData.length ? (
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={lineData} margin={{ top:5,right:8,left:-20,bottom:0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="month" tick={{ fontSize:11 }} axisLine={false} tickLine={false}/>
+              <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false}/>
+              <RTooltip content={<ChartTip money/>}/>
+              <Line type="monotone" dataKey="revenue" stroke={C.green} strokeWidth={2.5} dot={{ r:3 }} name="Revenue"/>
+            </LineChart>
+          </ResponsiveContainer>
+          ) : <div style={{ padding:'30px 20px',textAlign:'center',color:C.textDim,fontSize:13 }}>No booked revenue yet.</div>}
+        </Card>
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>Services Sold (Revenue)</h3>
+          {bd.length ? (
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={bd} layout="vertical" margin={{ top:5,right:12,left:30,bottom:0 }}>
+              <XAxis type="number" tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+v/1000+'k'}/>
+              <YAxis type="category" dataKey="name" tick={{ fontSize:10 }} axisLine={false} tickLine={false} width={90}/>
+              <RTooltip content={<ChartTip money/>} cursor={{ fill:C.cyanDim }}/>
+              <Bar dataKey="value" radius={[0,5,5,0]} name="Revenue">
+                {bd.map((e,i)=><Cell key={i} fill={e.color}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          ) : <div style={{ padding:'30px 20px',textAlign:'center',color:C.textDim,fontSize:13 }}>No service revenue yet.</div>}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   LAYOUT — Sidebar, Topbar, Shell
+   ============================================================ */
+function BrandMark({ size=42 }){
+  const [err,setErr]=useState(false);
+  if(!err) return (
+    <img src="logo.png" alt="Matrix Mobile Details" onError={()=>setErr(true)}
+      style={{ width:size,height:size,objectFit:'contain',flex:'0 0 auto',borderRadius:10,
+        filter:'drop-shadow(0 0 10px rgba(31,197,106,0.35))' }}/>
+  );
+  return (
+    <div style={{ width:size,height:size,borderRadius:12,flex:'0 0 auto',position:'relative',
+      background:'linear-gradient(135deg,#1fc56a,#e0b73c)',display:'grid',placeItems:'center',
+      boxShadow:'0 0 18px rgba(31,197,106,0.5)' }}>
+      <span style={{ fontSize:size*0.5,fontWeight:900,color:'#06090c',fontStyle:'italic' }}>M</span>
+    </div>
+  );
+}
+function NavItem({ item, active, onClick, badge, collapsed }){
+  const [h,setH]=useState(false);
+  return (
+    <button onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+      style={{ display:'flex',alignItems:'center',gap:12,padding:collapsed?'11px':'11px 14px',borderRadius:11,
+        width:'100%',position:'relative',transition:'all .15s',justifyContent:collapsed?'center':'flex-start',
+        background:active?'linear-gradient(135deg,rgba(31,197,106,0.16),rgba(224,183,60,0.12))':h?C.bg3:'transparent',
+        color:active?C.cyanBright:h?C.text:C.textDim,
+        border:`1px solid ${active?'rgba(31,197,106,0.3)':'transparent'}` }}>
+      {active && <span style={{ position:'absolute',left:0,top:'50%',transform:'translateY(-50%)',width:3,height:18,borderRadius:3,background:C.cyan,boxShadow:`0 0 8px ${C.cyan}` }}/>}
+      <Icon name={item.icon} size={19} color={active?C.cyan:'currentColor'}/>
+      {!collapsed && <span style={{ fontSize:14,fontWeight:active?700:500,flex:1,textAlign:'left' }}>{item.label}</span>}
+      {!collapsed && badge>0 && <span style={{ fontSize:11,fontWeight:800,color:'#04101c',background:C.gold,
+        borderRadius:20,padding:'1px 7px',minWidth:20,textAlign:'center' }}>{badge}</span>}
+    </button>
+  );
+}
+
+function Sidebar(){
+  const { page, setPage, notifs, user, setUser } = useApp();
+  const unread=notifs.filter(n=>!n.read).length;
+  const me=teamById(user);
+  return (
+    <aside className="sidebar-desktop" style={{ width:248,flex:'0 0 auto',height:'100vh',
+      background:'linear-gradient(180deg,rgba(10,16,12,0.98),rgba(6,9,12,0.98))',
+      borderRight:`1px solid ${C.border}`,display:'flex',flexDirection:'column',padding:'20px 14px' }}>
+      {/* Logo */}
+      <div style={{ display:'flex',alignItems:'center',gap:12,padding:'4px 8px 20px',marginBottom:6,borderBottom:`1px solid ${C.border}` }}>
+        <BrandMark size={44}/>
+        <div>
+          <div style={{ fontSize:15,fontWeight:800,letterSpacing:.5,
+            background:'linear-gradient(90deg,#5ef0a0,#fff 60%,#e0b73c)',WebkitBackgroundClip:'text',backgroundClip:'text',color:'transparent' }}>MATRIX</div>
+          <div style={{ fontSize:10,color:C.textDim,letterSpacing:1.5 }}>COMMAND CENTER</div>
+        </div>
+      </div>
+
+      <nav style={{ display:'flex',flexDirection:'column',gap:4,flex:1,overflowY:'auto',marginTop:8 }}>
+        {NAV.map(item=>(
+          <NavItem key={item.id} item={item} active={page===item.id} onClick={()=>setPage(item.id)}
+            badge={item.id==='notifications'?unread:0}/>
+        ))}
+      </nav>
+
+      {/* User switcher */}
+      <div style={{ marginTop:8,paddingTop:14,borderTop:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex',alignItems:'center',gap:10,padding:'8px 8px',borderRadius:11,background:C.bg2 }}>
+          <Avatar id={user} size={36} ring/>
+          <div style={{ flex:1,minWidth:0 }}>
+            <div style={{ fontSize:13.5,fontWeight:700 }}>{me.name}</div>
+            <div style={{ fontSize:11,color:C.textDim }}>{me.role}</div>
+          </div>
+          <button onClick={()=>setUser(user==='habib'?'partner':'habib')} title="Switch partner"
+            style={{ width:30,height:30,borderRadius:8,background:C.bg3,color:C.textDim,display:'grid',placeItems:'center' }}>
+            <Icon name="logout" size={15}/>
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function MobileNav(){
+  const { page, setPage, notifs } = useApp();
+  const unread=notifs.filter(n=>!n.read).length;
+  const items=NAV.filter(n=>['dashboard','schedule','tasks','finance','notifications'].includes(n.id));
+  return (
+    <nav className="mobile-nav" style={{ position:'fixed',bottom:0,left:0,right:0,zIndex:60,height:64,
+      background:'rgba(6,12,24,0.97)',borderTop:`1px solid ${C.border}`,backdropFilter:'blur(12px)',
+      display:'none',alignItems:'center',justifyContent:'space-around',padding:'0 8px' }}>
+      {items.map(item=>{ const active=page===item.id;
+        return (
+          <button key={item.id} onClick={()=>setPage(item.id)} style={{ display:'flex',flexDirection:'column',
+            alignItems:'center',gap:3,padding:'6px 12px',position:'relative',color:active?C.cyan:C.textDim }}>
+            {item.id==='notifications'&&unread>0 && <span style={{ position:'absolute',top:2,right:8,width:8,height:8,borderRadius:'50%',background:C.gold }}/>}
+            <Icon name={item.icon} size={21} color={active?C.cyan:'currentColor'}/>
+            <span style={{ fontSize:9.5,fontWeight:active?700:500 }}>{item.label.split(' ')[0]}</span>
+          </button>
+        ); })}
+    </nav>
+  );
+}
+
+function Topbar(){
+  const { setPage, notifs, page } = useApp();
+  const unread=notifs.filter(n=>!n.read).length;
+  return (
+    <div className="hide-mobile" style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 30px',
+      borderBottom:`1px solid ${C.border}`,background:'rgba(6,12,24,0.6)',backdropFilter:'blur(8px)',flex:'0 0 auto' }}>
+      <div style={{ position:'relative',flex:1,maxWidth:420 }}>
+        <span style={{ position:'absolute',left:13,top:'50%',transform:'translateY(-50%)' }}><Icon name="search" size={16} color={C.textDim}/></span>
+        <input placeholder="Search customers, jobs, tasks..." style={{ paddingLeft:38,background:C.bg2 }}/>
+      </div>
+      <div style={{ marginLeft:'auto',display:'flex',alignItems:'center',gap:6 }}>
+        <span className="dot-live"/>
+        <span style={{ fontSize:12,color:C.textDim,fontWeight:600 }}>Live</span>
+      </div>
+      <button onClick={()=>setPage('notifications')} style={{ position:'relative',width:38,height:38,borderRadius:10,
+        background:C.bg2,border:`1px solid ${C.border}`,display:'grid',placeItems:'center',color:C.text }}>
+        <Icon name="bell" size={18}/>
+        {unread>0 && <span style={{ position:'absolute',top:-4,right:-4,fontSize:10,fontWeight:800,color:'#04101c',
+          background:C.gold,borderRadius:20,padding:'1px 6px',minWidth:18,textAlign:'center' }}>{unread}</span>}
+      </button>
+      <button style={{ width:38,height:38,borderRadius:10,background:C.bg2,border:`1px solid ${C.border}`,display:'grid',placeItems:'center',color:C.text }}>
+        <Icon name="settings" size={18}/>
+      </button>
+    </div>
+  );
+}
+
+const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, finance:Finance, goals:Goals, team:Team, reports:Reports, notifications:Notifications };
+
+function Shell(){
+  const { page } = useApp();
+  const Page=PAGES[page]||Dashboard;
+  return (
+    <>
+      <Sidebar/>
+      <main style={{ flex:1,display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',minWidth:0 }}>
+        <Topbar/>
+        <Page/>
+      </main>
+      <MobileNav/>
+      <Toasts/>
+    </>
+  );
+}
+
+function App(){
+  return <AppProvider><Shell/></AppProvider>;
+}
+
+const root=ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+</body>
+</html>
