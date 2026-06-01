@@ -15,6 +15,7 @@
 <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.4/babel.min.js"></script>
 <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -183,6 +184,19 @@ const GHL_CAL='sA5qta4JYh961np0ienC';
 const GHL_USER='v1rBWcBX8nB2a3RwvpzR';
 const GHL_PROXY='/.netlify/functions/ghl';
 
+/* ============================================================
+   SUPABASE  — shared sync for tasks + goals (Habib <-> Ryan)
+   Dedicated Matrix project; completely separate from JARVIS.
+   Paste the NEW project's URL + publishable key below.
+   ============================================================ */
+const SUPA_URL = '';   /* e.g. https://xxxx.supabase.co  */
+const SUPA_KEY = '';   /* publishable (anon) key — browser-safe under RLS */
+const SUPA_TABLE = 'matrix';
+const SUPA_ROW = 'workspace';
+const supa = (SUPA_URL && SUPA_KEY && window.supabase)
+  ? window.supabase.createClient(SUPA_URL, SUPA_KEY)
+  : null;
+
 /* GHL custom-field IDs (discovered from live records) */
 const CF_VEHICLE='MJaH6FI38stKWO0Q4z4k';
 const CF_SERVICE='giKcGWgma7eU1SZmcAoH';
@@ -341,6 +355,62 @@ function AppProvider({ children }){
   useEffect(()=>{ lsSave('goals',goals); },[goals]);
   useEffect(()=>{ lsSave('messages',messages); },[messages]);
   useEffect(()=>{ lsSave('announce',announce); },[announce]);
+
+  /* ---- Supabase shared sync: tasks + goals (last-write-wins) ---- */
+  const applyingRemote = useRef(false);   /* guard against echo loops */
+  const remoteStamp = useRef(0);          /* updated_at of last applied remote */
+  const pushTimer = useRef(null);
+
+  const applyRemote = useCallback((row)=>{
+    if(!row || !row.data) return;
+    const stamp = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+    if(stamp && stamp <= remoteStamp.current) return;  /* not newer */
+    remoteStamp.current = stamp;
+    applyingRemote.current = true;
+    if(Array.isArray(row.data.tasks)) setTasks(row.data.tasks);
+    if(Array.isArray(row.data.goals)) setGoals(row.data.goals);
+    /* release the guard after state settles */
+    setTimeout(()=>{ applyingRemote.current = false; }, 0);
+  },[]);
+
+  const pullRemote = useCallback(async ()=>{
+    if(!supa) return;
+    try{
+      const { data, error } = await supa
+        .from(SUPA_TABLE).select('data,updated_at')
+        .eq('id', SUPA_ROW).maybeSingle();
+      if(!error && data) applyRemote(data);
+    }catch(e){}
+  },[applyRemote]);
+
+  /* initial pull + realtime subscription + focus/interval refresh */
+  useEffect(()=>{
+    if(!supa) return;
+    pullRemote();
+    const channel = supa.channel('matrix-ws')
+      .on('postgres_changes',
+        { event:'*', schema:'public', table:SUPA_TABLE, filter:'id=eq.'+SUPA_ROW },
+        (payload)=>{ if(payload.new) applyRemote(payload.new); })
+      .subscribe();
+    const onFocus=()=>pullRemote();
+    window.addEventListener('focus', onFocus);
+    const iv = setInterval(pullRemote, 20000);
+    return ()=>{ supa.removeChannel(channel); window.removeEventListener('focus', onFocus); clearInterval(iv); };
+  },[pullRemote]);
+
+  /* debounced push whenever tasks/goals change locally */
+  useEffect(()=>{
+    if(!supa || applyingRemote.current) return;
+    if(pushTimer.current) clearTimeout(pushTimer.current);
+    pushTimer.current = setTimeout(async ()=>{
+      const updated_at = new Date().toISOString();
+      remoteStamp.current = new Date(updated_at).getTime();
+      try{
+        await supa.from(SUPA_TABLE).upsert({ id:SUPA_ROW, data:{ tasks, goals }, updated_at });
+      }catch(e){}
+    }, 800);
+    return ()=>{ if(pushTimer.current) clearTimeout(pushTimer.current); };
+  },[tasks, goals]);
 
   const toast = useCallback((msg, kind='success')=>{
     const id = uid();
