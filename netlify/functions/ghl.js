@@ -11,21 +11,26 @@ const ALLOWED = [
   '/contacts/',
 ];
 
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS' };
+
 exports.handler = async (event) => {
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers: CORS, body: '' };
+  }
   if (event.httpMethod !== 'GET') {
-    return { statusCode: 405, body: 'Method not allowed' };
+    return { statusCode: 405, headers: CORS, body: 'Method not allowed' };
   }
 
   const params = event.queryStringParameters || {};
   const ghlpath = params.ghlpath || '';
 
   if (!ALLOWED.some((p) => ghlpath === p || ghlpath.startsWith(p))) {
-    return { statusCode: 400, body: 'Path not allowed' };
+    return { statusCode: 400, headers: CORS, body: 'Path not allowed' };
   }
 
   const token = process.env.GHL_TOKEN;
   if (!token) {
-    return { statusCode: 500, body: 'GHL_TOKEN not configured' };
+    return { statusCode: 500, headers: CORS, body: 'GHL_TOKEN not configured' };
   }
 
   const url = new URL(GHL_BASE + ghlpath);
@@ -40,10 +45,10 @@ exports.handler = async (event) => {
     const text = await r.text();
     return {
       statusCode: r.status,
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      headers: { ...CORS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
       body: text,
     };
   } catch (e) {
-    return { statusCode: 502, body: 'Upstream error' };
+    return { statusCode: 502, headers: CORS, body: 'Upstream error' };
   }
 };

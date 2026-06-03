@@ -1279,11 +1279,16 @@ async function fetchWeather(){
 }
 
 /* ===================== LIVE GHL REFRESH ===================== */
-const GHL_TOKEN='pit-e0014864-3858-49b4-848e-e2e431d9955b';
 const GHL_LOC='4oujU1ql0szJ60pb1xzk';
 const GHL_CAL='sA5qta4JYh961np0ienC';
-const GHL_BASE='https://services.leadconnectorhq.com';
-const GHL_HDR={'Authorization':'Bearer '+GHL_TOKEN,'Version':'2021-07-28'};
+/* Token lives server-side in the Command Center proxy (Netlify GHL_TOKEN env var), never in this file. */
+const GHL_PROXY='https://matrixcommandcenter.netlify.app/.netlify/functions/ghl';
+function ghlURL(path, params){
+  const u=new URL(GHL_PROXY);
+  u.searchParams.set('ghlpath', path);
+  Object.entries(params||{}).forEach(([k,v])=>{ if(v!=null) u.searchParams.set(k, String(v)); });
+  return u;
+}
 
 async function fetchGHLLive(){
   try{
@@ -1304,23 +1309,23 @@ async function fetchGHLLive(){
 
     // Fetch all contacts counts in parallel
     const contactFetches=periods.map(p=>
-      fetch(`${GHL_BASE}/contacts/?locationId=${GHL_LOC}&limit=1&startDate=${iso(p.start)}&endDate=${iso(now)}`,{headers:GHL_HDR})
+      fetch(ghlURL('/contacts/',{locationId:GHL_LOC,limit:1,startDate:iso(p.start),endDate:iso(now)}))
         .then(r=>r.json()).then(d=>({key:p.key,total:d.meta?.total||0}))
     );
     // Monthly contacts
-    const cThisMonth=fetch(`${GHL_BASE}/contacts/?locationId=${GHL_LOC}&limit=1&startDate=${iso(thisMonthStart)}&endDate=${iso(now)}`,{headers:GHL_HDR})
+    const cThisMonth=fetch(ghlURL('/contacts/',{locationId:GHL_LOC,limit:1,startDate:iso(thisMonthStart),endDate:iso(now)}))
       .then(r=>r.json()).then(d=>d.meta?.total||0);
-    const cLastMonth=fetch(`${GHL_BASE}/contacts/?locationId=${GHL_LOC}&limit=1&startDate=${iso(lastMonthStart)}&endDate=${iso(lastMonthEnd)}`,{headers:GHL_HDR})
+    const cLastMonth=fetch(ghlURL('/contacts/',{locationId:GHL_LOC,limit:1,startDate:iso(lastMonthStart),endDate:iso(lastMonthEnd)}))
       .then(r=>r.json()).then(d=>d.meta?.total||0);
 
     // Fetch all booking counts in parallel
     const bookFetches=periods.map(p=>
-      fetch(`${GHL_BASE}/calendars/events?locationId=${GHL_LOC}&calendarId=${GHL_CAL}&startTime=${ms(p.start)}&endTime=${ms(now)}`,{headers:GHL_HDR})
+      fetch(ghlURL('/calendars/events',{locationId:GHL_LOC,calendarId:GHL_CAL,startTime:ms(p.start),endTime:ms(now)}))
         .then(r=>r.json()).then(d=>({key:p.key,count:(d.events||[]).length}))
     );
-    const bThisMonth=fetch(`${GHL_BASE}/calendars/events?locationId=${GHL_LOC}&calendarId=${GHL_CAL}&startTime=${ms(thisMonthStart)}&endTime=${ms(now)}`,{headers:GHL_HDR})
+    const bThisMonth=fetch(ghlURL('/calendars/events',{locationId:GHL_LOC,calendarId:GHL_CAL,startTime:ms(thisMonthStart),endTime:ms(now)}))
       .then(r=>r.json()).then(d=>(d.events||[]).length);
-    const bLastMonth=fetch(`${GHL_BASE}/calendars/events?locationId=${GHL_LOC}&calendarId=${GHL_CAL}&startTime=${ms(lastMonthStart)}&endTime=${ms(lastMonthEnd)}`,{headers:GHL_HDR})
+    const bLastMonth=fetch(ghlURL('/calendars/events',{locationId:GHL_LOC,calendarId:GHL_CAL,startTime:ms(lastMonthStart),endTime:ms(lastMonthEnd)}))
       .then(r=>r.json()).then(d=>(d.events||[]).length);
 
     const [contacts,bookings,cTM,cLM,bTM,bLM]=await Promise.all([
