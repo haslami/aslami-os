@@ -359,22 +359,34 @@ function AppProvider({ children }){
   useEffect(()=>{ lsSave('messages',messages); },[messages]);
   useEffect(()=>{ lsSave('announce',announce); },[announce]);
 
-  /* ---- Supabase shared sync: tasks + goals (last-write-wins) ---- */
-  const applyingRemote = useRef(false);   /* guard against echo loops */
+  /* ---- Supabase shared sync: tasks + goals + messages + announce + revenue (last-write-wins) ---- */
   const remoteStamp = useRef(0);          /* updated_at of last applied remote */
   const pushTimer = useRef(null);
+  /* JSON of the last state we either received from remote or pushed; used to
+     skip echo writes without relying on fragile timing flags. */
+  const lastSyncedRef = useRef(null);
+  /* always-current snapshot of synced state, so applyRemote can merge against
+     it (remote rows may omit some keys) without stale-closure values. */
+  const stateRef = useRef({});
+  stateRef.current = { tasks, goals, revenue2026, messages, announce };
+  const serializeSync = (s)=>JSON.stringify({
+    tasks:s.tasks, goals:s.goals, revenue2026:s.revenue2026, messages:s.messages, announce:s.announce,
+  });
 
   const applyRemote = useCallback((row)=>{
     if(!row || !row.data) return;
     const stamp = row.updated_at ? new Date(row.updated_at).getTime() : 0;
     if(stamp && stamp <= remoteStamp.current) return;  /* not newer */
     remoteStamp.current = stamp;
-    applyingRemote.current = true;
-    if(Array.isArray(row.data.tasks)) setTasks(row.data.tasks);
-    if(Array.isArray(row.data.goals)) setGoals(row.data.goals);
-    if(typeof row.data.revenue2026 !== 'undefined') setRevenue2026(row.data.revenue2026);
-    /* release the guard after state settles */
-    setTimeout(()=>{ applyingRemote.current = false; }, 0);
+    const d = row.data;
+    const merged = { ...stateRef.current };
+    if(Array.isArray(d.tasks)){ setTasks(d.tasks); merged.tasks = d.tasks; }
+    if(Array.isArray(d.goals)){ setGoals(d.goals); merged.goals = d.goals; }
+    if(Array.isArray(d.messages)){ setMessages(d.messages); merged.messages = d.messages; }
+    if(Array.isArray(d.announce)){ setAnnounce(d.announce); merged.announce = d.announce; }
+    if(typeof d.revenue2026 !== 'undefined'){ setRevenue2026(d.revenue2026); merged.revenue2026 = d.revenue2026; }
+    /* baseline = the state we just applied, so the push effect sees no diff and skips */
+    lastSyncedRef.current = serializeSync(merged);
   },[]);
 
   const pullRemote = useCallback(async ()=>{
@@ -402,19 +414,25 @@ function AppProvider({ children }){
     return ()=>{ supa.removeChannel(channel); window.removeEventListener('focus', onFocus); clearInterval(iv); };
   },[pullRemote]);
 
-  /* debounced push whenever tasks/goals change locally */
+  /* debounced push whenever synced state changes locally */
   useEffect(()=>{
-    if(!supa || applyingRemote.current) return;
+    if(!supa) return;
+    const payload = serializeSync({ tasks, goals, revenue2026, messages, announce });
+    /* first run: adopt current state as baseline, nothing to push yet */
+    if(lastSyncedRef.current === null){ lastSyncedRef.current = payload; return; }
+    /* unchanged vs last sync (incl. echoes of our own / remote writes): skip */
+    if(payload === lastSyncedRef.current) return;
     if(pushTimer.current) clearTimeout(pushTimer.current);
     pushTimer.current = setTimeout(async ()=>{
       const updated_at = new Date().toISOString();
       remoteStamp.current = new Date(updated_at).getTime();
+      lastSyncedRef.current = payload;
       try{
-        await supa.from(SUPA_TABLE).upsert({ id:SUPA_ROW, data:{ tasks, goals, revenue2026 }, updated_at });
+        await supa.from(SUPA_TABLE).upsert({ id:SUPA_ROW, data:JSON.parse(payload), updated_at });
       }catch(e){}
     }, 800);
     return ()=>{ if(pushTimer.current) clearTimeout(pushTimer.current); };
-  },[tasks, goals, revenue2026]);
+  },[tasks, goals, revenue2026, messages, announce]);
 
   const toast = useCallback((msg, kind='success')=>{
     const id = uid();
