@@ -347,6 +347,7 @@ function AppProvider({ children }){
   /* Local workspaces (user-managed; not numbers) */
   const [tasks, setTasks] = useState(()=>lsLoad('tasks',[]));
   const [goals, setGoals] = useState(()=>lsLoad('goals',[]));
+  const [revenue2026, setRevenue2026] = useState(()=>lsLoad('revenue2026',null));
   const [notifs, setNotifs] = useState([]);
   const [messages, setMessages] = useState(()=>lsLoad('messages',[]));
   const [announce, setAnnounce] = useState(()=>lsLoad('announce',[]));
@@ -354,6 +355,7 @@ function AppProvider({ children }){
 
   useEffect(()=>{ lsSave('tasks',tasks); },[tasks]);
   useEffect(()=>{ lsSave('goals',goals); },[goals]);
+  useEffect(()=>{ lsSave('revenue2026',revenue2026); },[revenue2026]);
   useEffect(()=>{ lsSave('messages',messages); },[messages]);
   useEffect(()=>{ lsSave('announce',announce); },[announce]);
 
@@ -370,6 +372,7 @@ function AppProvider({ children }){
     applyingRemote.current = true;
     if(Array.isArray(row.data.tasks)) setTasks(row.data.tasks);
     if(Array.isArray(row.data.goals)) setGoals(row.data.goals);
+    if(typeof row.data.revenue2026 !== 'undefined') setRevenue2026(row.data.revenue2026);
     /* release the guard after state settles */
     setTimeout(()=>{ applyingRemote.current = false; }, 0);
   },[]);
@@ -407,11 +410,11 @@ function AppProvider({ children }){
       const updated_at = new Date().toISOString();
       remoteStamp.current = new Date(updated_at).getTime();
       try{
-        await supa.from(SUPA_TABLE).upsert({ id:SUPA_ROW, data:{ tasks, goals }, updated_at });
+        await supa.from(SUPA_TABLE).upsert({ id:SUPA_ROW, data:{ tasks, goals, revenue2026 }, updated_at });
       }catch(e){}
     }, 800);
     return ()=>{ if(pushTimer.current) clearTimeout(pushTimer.current); };
-  },[tasks, goals]);
+  },[tasks, goals, revenue2026]);
 
   const toast = useCallback((msg, kind='success')=>{
     const id = uid();
@@ -441,6 +444,7 @@ function AppProvider({ children }){
     page, setPage, user, setUser, toast, toasts, setToasts,
     appts, tasks, leads, goals, notifs, messages, announce,
     loading, ghlError, lastSync, contactCount, sync,
+    revenue2026, setRevenue2026,
 
     addAppt:(a)=>{ setAppts(p=>[...p,{...a,id:uid()}]); toast('Appointment scheduled'); },
     updateAppt:(id,patch)=>setAppts(p=>p.map(a=>a.id===id?{...a,...patch}:a)),
@@ -738,7 +742,16 @@ function KPI({ label, value, sub, trend, trendUp, color=C.cyan, icon, big }){
 
 const BLANK='—';
 function Dashboard(){
-  const { appts, tasks, leads, goals, notifs, setPage, loading, ghlError } = useApp();
+  const { appts, tasks, leads, goals, notifs, setPage, loading, ghlError, revenue2026, setRevenue2026, toast } = useApp();
+  const [editingRev, setEditingRev] = useState(false);
+  const [revDraft, setRevDraft] = useState('');
+  const beginEditRev = ()=>{ setRevDraft(revenue2026!=null?String(revenue2026):''); setEditingRev(true); };
+  const saveRev = ()=>{
+    const n = Number(String(revDraft).replace(/[^0-9.]/g,''));
+    setRevenue2026(revDraft.trim()===''?null:(isFinite(n)?n:revenue2026));
+    setEditingRev(false);
+    toast('2026 revenue updated');
+  };
   const live = appts.filter(a=>a.status!=='cancelled');
   const todayAppts = live.filter(a=>a.date===TODAY).sort((a,b)=>a.time.localeCompare(b.time));
   const todayRev = todayAppts.reduce((s,a)=>s+(a.price||0),0);
@@ -761,6 +774,48 @@ function Dashboard(){
   return (
     <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
       <PageHead title="Command Center" sub={NOW.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})+' · Matrix Mobile Details'}/>
+
+      {/* 2026 TOTAL REVENUE (manual, synced) */}
+      <Card pad={20} style={{ marginBottom:18,display:'flex',alignItems:'center',justifyContent:'space-between',gap:16,
+        background:`linear-gradient(135deg, ${C.green}14, ${C.gold}0e)`,borderColor:C.green+'44' }}>
+        <div style={{ display:'flex',alignItems:'center',gap:14 }}>
+          <div style={{ width:46,height:46,borderRadius:12,background:`${C.green}22`,display:'grid',placeItems:'center',flex:'0 0 auto' }}>
+            <Icon name="trendUp" size={24} color={C.green}/>
+          </div>
+          <div>
+            <div style={{ fontSize:11,fontWeight:600,letterSpacing:'.08em',textTransform:'uppercase',color:C.textDim }}>2026 Total Revenue</div>
+            {editingRev ? (
+              <input autoFocus value={revDraft}
+                onChange={e=>setRevDraft(e.target.value)}
+                onKeyDown={e=>{ if(e.key==='Enter') saveRev(); if(e.key==='Escape') setEditingRev(false); }}
+                placeholder="e.g. 92500"
+                style={{ marginTop:4,fontSize:30,fontWeight:800,color:C.text,background:'transparent',
+                  border:'none',borderBottom:`2px solid ${C.green}`,outline:'none',width:200,fontFamily:'inherit' }}/>
+            ) : (
+              <div style={{ fontSize:32,fontWeight:800,color:C.text,lineHeight:1.05,marginTop:2 }}>
+                {revenue2026!=null?fmt$(revenue2026):BLANK}
+              </div>
+            )}
+            <div style={{ fontSize:11,color:C.textDim,marginTop:3 }}>From your finance spreadsheet · synced with Ryan</div>
+          </div>
+        </div>
+        <div style={{ display:'flex',gap:8,flex:'0 0 auto' }}>
+          {editingRev ? (
+            <>
+              <button onClick={saveRev} style={{ padding:'9px 16px',borderRadius:9,border:'none',background:C.green,
+                color:'#06090c',fontWeight:700,fontSize:13,cursor:'pointer' }}>Save</button>
+              <button onClick={()=>setEditingRev(false)} style={{ padding:'9px 14px',borderRadius:9,
+                border:`1px solid ${C.border}`,background:'transparent',color:C.textDim,fontSize:13,cursor:'pointer' }}>Cancel</button>
+            </>
+          ) : (
+            <button onClick={beginEditRev} style={{ padding:'9px 16px',borderRadius:9,
+              border:`1px solid ${C.green}55`,background:`${C.green}1c`,color:C.green,fontWeight:600,fontSize:13,
+              cursor:'pointer',display:'flex',alignItems:'center',gap:7 }}>
+              <Icon name="edit" size={14} color={C.green}/>{revenue2026!=null?'Update':'Set total'}
+            </button>
+          )}
+        </div>
+      </Card>
 
       {ghlError && <Card pad={14} style={{ marginBottom:16,borderColor:C.red+'55',background:C.redDim,display:'flex',alignItems:'center',gap:10 }}>
         <Icon name="alert" size={18} color={C.red}/>
