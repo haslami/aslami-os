@@ -754,7 +754,6 @@ function Dashboard(){
   };
   const live = appts.filter(a=>a.status!=='cancelled');
   const todayAppts = live.filter(a=>a.date===TODAY).sort((a,b)=>a.time.localeCompare(b.time));
-  const todayRev = todayAppts.reduce((s,a)=>s+(a.price||0),0);
   const ws = localISO(startOfWeek(NOW));
   const mStart = localISO(new Date(NOW.getFullYear(),NOW.getMonth(),1));
   const weekRev = sumRange(live, ws, TODAY);
@@ -764,8 +763,6 @@ function Dashboard(){
   const followUps = leads.filter(l=>l.stage==='quoted'||l.stage==='contacted');
   const unread = notifs.filter(n=>!n.read).length;
   const openLeads = leads.filter(l=>l.stage!=='won'&&l.stage!=='lost').length;
-  const priced = live.filter(a=>a.price>0);
-  const avgTicket = priced.length ? Math.round(priced.reduce((s,a)=>s+a.price,0)/priced.length) : null;
   const leadsThisMonth = leads.filter(l=>l.ts>=new Date(NOW.getFullYear(),NOW.getMonth(),1).getTime()).length;
   const ceramicRev = live.filter(a=>a.service==='ceramic'&&a.date>=mStart&&a.date<=TODAY).reduce((s,a)=>s+(a.price||0),0);
   const breakdown = serviceBreakdown(live);
@@ -826,9 +823,7 @@ function Dashboard(){
       <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))',gap:12,marginBottom:18 }} className="grid-resp">
         {[
           { l:'Jobs Today', v:todayAppts.length, c:C.cyan, ic:'car' },
-          { l:'Revenue Today', v:fmt$(todayRev), c:C.green, ic:'dollar' },
           { l:'Open Leads', v:openLeads, c:C.gold, ic:'zap' },
-          { l:'Follow-ups Due', v:followUps.length, c:C.orange, ic:'phone' },
           { l:'Tasks Due', v:dueTasks.length, c:C.purple, ic:'check' },
           { l:'Unread Alerts', v:unread, c:C.pink, ic:'bell' },
         ].map((x,i)=>(
@@ -846,9 +841,6 @@ function Dashboard(){
 
       {/* KPI CARDS */}
       <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
-        <KPI label="Revenue This Week" value={fmt$(weekRev)} icon="dollar" color={C.cyan} sub="booked jobs"/>
-        <KPI label="Revenue This Month" value={fmt$(monthRev)} icon="trendUp" color={C.green} sub={monthGoal?'of '+fmt$(monthGoal.target)+' goal':'month to date'}/>
-        <KPI label="Avg Ticket" value={avgTicket!=null?fmt$(avgTicket):BLANK} icon="chart" color={C.gold} sub="priced jobs"/>
         <KPI label="Leads This Month" value={leadsThisMonth} icon="zap" color={C.purple}/>
         <KPI label="Conversion" value={BLANK} icon="target" color={C.cyanBright} sub="needs setup"/>
         <KPI label="Repeat Rate" value={BLANK} icon="users" color={C.pink} sub="needs setup"/>
