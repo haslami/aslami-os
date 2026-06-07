@@ -39,9 +39,13 @@
   @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:none;opacity:1}}
   @keyframes scaleIn{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
   @keyframes glow{0%,100%{box-shadow:0 0 6px rgba(31,197,106,.3)}50%{box-shadow:0 0 18px rgba(31,197,106,.55)}}
+  @keyframes glowRed{0%,100%{box-shadow:0 0 0 1px rgba(255,90,90,.35),0 0 10px rgba(255,90,90,.18)}50%{box-shadow:0 0 0 1px rgba(255,90,90,.6),0 0 20px rgba(255,90,90,.4)}}
+  @keyframes pulseSoft{0%,100%{opacity:1}50%{opacity:.55}}
   @keyframes shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
   @keyframes growBar{from{width:0}}
 
+  .pulse-soft{animation:pulseSoft 1.6s ease-in-out infinite}
+  .glow-red{animation:glowRed 1.8s ease-in-out infinite}
   .fade-in{animation:fadeIn .3s ease forwards}
   .fade-in-fast{animation:fadeInFast .2s ease forwards}
   .scale-in{animation:scaleIn .2s ease forwards}
@@ -157,6 +161,16 @@ const uid = () => Math.random().toString(36).slice(2,10);
 function fmtDate(isoStr, opt){
   const d = new Date(isoStr+'T00:00:00');
   return d.toLocaleDateString('en-US', opt || { month:'short', day:'numeric' });
+}
+/* Urgency metadata for a task due date. level: overdue | today | soon | none */
+function dueMeta(isoStr, status){
+  if(status==='completed') return { label:fmtDate(isoStr), color:'#8aa395', level:'none' };
+  const diff = Math.round((new Date(isoStr+'T00:00:00') - new Date(TODAY+'T00:00:00'))/86400000);
+  if(diff < 0)  return { label:(-diff)+(diff===-1?' day overdue':' days overdue'), color:'#ff5a5a', level:'overdue' };
+  if(diff===0)  return { label:'Due today',    color:'#d98a2b', level:'today' };
+  if(diff===1)  return { label:'Due tomorrow', color:'#e0b73c', level:'soon' };
+  if(diff<=3)   return { label:'Due in '+diff+' days', color:'#e0b73c', level:'soon' };
+  return { label:fmtDate(isoStr), color:'#8aa395', level:'none' };
 }
 function relTime(ts){
   const diff = (Date.now()-ts)/1000;
@@ -1193,26 +1207,45 @@ function TaskModal({ open, onClose, initial }){
   );
 }
 
+/* Urgency pill for a task's due date. Plain text when not urgent, colored pill otherwise. */
+function DueChip({ due, status }){
+  const d = dueMeta(due, status);
+  if(d.level==='none')
+    return <span style={{ fontSize:11.5,color:C.textDim,display:'inline-flex',alignItems:'center',gap:4 }}>
+      <Icon name="clock" size={12} color={C.textDim}/>{d.label}</span>;
+  return <span className={d.level==='overdue'?'pulse-soft':''}
+    style={{ fontSize:11,fontWeight:800,letterSpacing:.2,color:d.color,background:`${d.color}1f`,
+      border:`1px solid ${d.color}66`,borderRadius:20,padding:'3px 9px',display:'inline-flex',alignItems:'center',gap:4 }}>
+    <Icon name={d.level==='overdue'?'alert':'clock'} size={12} color={d.color}/>{d.label}</span>;
+}
+
 function TaskCard({ task, onClick, onDragStart, onDragEnd, dragging }){
-  const m=teamById(task.assignedTo); const p=PRIORITY[task.priority];
-  const overdue=task.due<TODAY && task.status!=='completed';
+  const p=PRIORITY[task.priority];
+  const active=task.status!=='completed';
+  const high=task.priority==='high' && active;
+  const urgent=dueMeta(task.due,task.status).level==='overdue';
+  const flag=high||urgent;   /* needs attention */
   return (
     <div draggable onClick={onClick}
       onDragStart={e=>onDragStart(e,task.id)} onDragEnd={onDragEnd}
-      style={{ background:C.bg2,border:`1px solid ${C.border}`,borderRadius:11,padding:13,
+      className={urgent?'glow-red':''}
+      style={{ background: flag?`linear-gradient(135deg, ${C.red}16, ${C.bg2} 55%)`:C.bg2,
+        border:`1px solid ${flag?C.red+'44':C.border}`,borderRadius:11,padding:13,
         opacity:dragging?0.35:1,transition:'opacity .15s,transform .15s,border-color .15s',
-        borderLeft:`3px solid ${p.color}` }}
-      onMouseEnter={e=>e.currentTarget.style.borderColor=C.borderHi}
-      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+        borderLeft:`${flag?4:3}px solid ${high?C.red:p.color}` }}
+      onMouseEnter={e=>{ if(!urgent) e.currentTarget.style.borderColor=C.borderHi; }}
+      onMouseLeave={e=>{ if(!urgent) e.currentTarget.style.borderColor=flag?C.red+'44':C.border; }}>
       <div style={{ display:'flex',justifyContent:'space-between',gap:8,marginBottom:7 }}>
-        <span style={{ fontSize:13.5,fontWeight:600,lineHeight:1.3 }} className="clamp2">{task.title}</span>
-        <Badge color={p.color}>{p.label}</Badge>
+        <span style={{ fontSize:13.5,fontWeight:high?700:600,lineHeight:1.3,
+          display:'inline-flex',alignItems:'flex-start',gap:5 }} className="clamp2">
+          {high && <Icon name="flag" size={13} color={C.red} style={{ marginTop:2,flex:'0 0 auto' }}/>}
+          {task.title}
+        </span>
+        <Badge color={high?C.red:p.color} solid={high}>{high&&'⚡ '}{p.label}</Badge>
       </div>
       {task.desc && <p style={{ fontSize:12,color:C.textDim,marginBottom:9 }} className="clamp2">{task.desc}</p>}
       <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}>
-        <span style={{ fontSize:11.5,color:overdue?C.red:C.textDim,display:'inline-flex',alignItems:'center',gap:4 }}>
-          <Icon name="clock" size={12} color={overdue?C.red:C.textDim}/>{fmtDate(task.due)}
-        </span>
+        <DueChip due={task.due} status={task.status}/>
         <div style={{ display:'flex',alignItems:'center',gap:6 }}>
           {task.comments.length>0 && <span style={{ fontSize:11,color:C.textDim,display:'inline-flex',alignItems:'center',gap:3 }}><Icon name="message" size={12}/>{task.comments.length}</span>}
           <Avatar id={task.assignedTo} size={24}/>
@@ -1291,18 +1324,24 @@ function Tasks(){
         </div>
       ) : (
         <Card pad={0} style={{ overflow:'hidden' }}>
-          {shown.map((t,i)=>{ const p=PRIORITY[t.priority]; const col=TASK_COLS.find(c=>c.id===t.status); const overdue=t.due<TODAY&&t.status!=='completed';
+          {shown.map((t,i)=>{ const p=PRIORITY[t.priority]; const col=TASK_COLS.find(c=>c.id===t.status);
+            const active=t.status!=='completed'; const high=t.priority==='high'&&active;
+            const urgent=dueMeta(t.due,t.status).level==='overdue'; const flag=high||urgent;
             return (
               <div key={t.id} onClick={()=>openEdit(t)} style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 18px',
-                borderBottom:i<shown.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',borderLeft:`3px solid ${p.color}` }}
-                onMouseEnter={e=>e.currentTarget.style.background=C.bg2} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                borderBottom:i<shown.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',
+                background:flag?`linear-gradient(90deg, ${C.red}12, transparent 40%)`:'transparent',
+                borderLeft:`${flag?4:3}px solid ${high?C.red:p.color}` }}
+                onMouseEnter={e=>e.currentTarget.style.background=C.bg2}
+                onMouseLeave={e=>e.currentTarget.style.background=flag?`linear-gradient(90deg, ${C.red}12, transparent 40%)`:'transparent'}>
                 <span style={{ width:9,height:9,borderRadius:'50%',background:col.color,flex:'0 0 auto' }}/>
                 <div style={{ flex:1,minWidth:0 }}>
-                  <div style={{ fontSize:14,fontWeight:600 }} className="clamp1">{t.title}</div>
+                  <div style={{ fontSize:14,fontWeight:high?700:600,display:'inline-flex',alignItems:'center',gap:6 }} className="clamp1">
+                    {high && <Icon name="flag" size={13} color={C.red} style={{ flex:'0 0 auto' }}/>}{t.title}</div>
                   {t.desc && <div style={{ fontSize:12,color:C.textDim }} className="clamp1">{t.desc}</div>}
                 </div>
-                <Badge color={p.color}>{p.label}</Badge>
-                <span style={{ fontSize:12,color:overdue?C.red:C.textDim,minWidth:64 }}>{fmtDate(t.due)}</span>
+                <Badge color={high?C.red:p.color} solid={high}>{high&&'⚡ '}{p.label}</Badge>
+                <DueChip due={t.due} status={t.status}/>
                 <Avatar id={t.assignedTo} size={28}/>
               </div>
             ); })}
