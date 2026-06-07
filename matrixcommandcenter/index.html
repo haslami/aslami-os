@@ -1300,10 +1300,27 @@ function Tasks(){
       </div>
 
       {view==='kanban' ? (
-        <div style={{ display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,flex:1,minHeight:0 }} className="grid-resp">
+        <div style={{ display:'grid',gridTemplateColumns:TASK_COLS.map(c=>collapsedCols[c.id]?'minmax(46px,auto)':'minmax(0,1fr)').join(' '),gap:14,flex:1,minHeight:0,alignItems:'start' }} className="grid-resp">
           {TASK_COLS.map(col=>{
             const list=shown.filter(t=>t.status===col.id);
             const collapsed=!!collapsedCols[col.id];
+            if(collapsed) return (
+              <div key={col.id}
+                onClick={()=>toggleCol(col.id)}
+                onDragOver={e=>{e.preventDefault();setOver(col.id);}}
+                onDragLeave={()=>setOver(o=>o===col.id?null:o)}
+                onDrop={()=>onDrop(col.id)}
+                title={`Expand ${col.label}`}
+                style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:10,
+                  background:over===col.id?'rgba(31,197,106,0.08)':C.panel,
+                  border:`1px solid ${over===col.id?C.borderHi:C.border}`,borderRadius:14,padding:'12px 8px',
+                  transition:'background .15s,border-color .15s',cursor:'pointer',userSelect:'none',alignSelf:'stretch' }}>
+                <Icon name="chevR" size={16} color={C.textDim}/>
+                <span style={{ width:9,height:9,borderRadius:'50%',background:col.color,boxShadow:`0 0 8px ${col.color}` }}/>
+                <span style={{ fontSize:12,fontWeight:700,color:C.textDim,background:C.bg3,padding:'2px 7px',borderRadius:20 }}>{list.length}</span>
+                <span style={{ fontSize:13,fontWeight:700,writingMode:'vertical-rl',letterSpacing:.4,marginTop:2 }}>{col.label}</span>
+              </div>
+            );
             return (
               <div key={col.id}
                 onDragOver={e=>{e.preventDefault();setOver(col.id);}}
@@ -1311,21 +1328,19 @@ function Tasks(){
                 onDrop={()=>onDrop(col.id)}
                 style={{ display:'flex',flexDirection:'column',background:over===col.id?'rgba(31,197,106,0.08)':C.panel,
                   border:`1px solid ${over===col.id?C.borderHi:C.border}`,borderRadius:14,padding:12,
-                  transition:'background .15s,border-color .15s',minHeight:collapsed?0:200 }}>
+                  transition:'background .15s,border-color .15s',minHeight:200,alignSelf:'stretch' }}>
                 <div onClick={()=>toggleCol(col.id)}
-                  style={{ display:'flex',alignItems:'center',gap:8,marginBottom:collapsed?0:12,paddingBottom:collapsed?0:10,
-                    borderBottom:collapsed?'none':`1px solid ${C.border}`,cursor:'pointer',userSelect:'none' }}>
+                  style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12,paddingBottom:10,
+                    borderBottom:`1px solid ${C.border}`,cursor:'pointer',userSelect:'none' }}>
                   <span style={{ width:9,height:9,borderRadius:'50%',background:col.color,boxShadow:`0 0 8px ${col.color}` }}/>
                   <span style={{ fontSize:13.5,fontWeight:700 }}>{col.label}</span>
                   <span style={{ marginLeft:'auto',fontSize:12,fontWeight:700,color:C.textDim,background:C.bg3,padding:'2px 9px',borderRadius:20 }}>{list.length}</span>
-                  <Icon name={collapsed?'chevR':'chevD'} size={16} color={C.textDim} style={{ marginLeft:2 }}/>
+                  <Icon name="chevD" size={16} color={C.textDim} style={{ marginLeft:2 }}/>
                 </div>
-                {!collapsed && (
-                  <div style={{ display:'flex',flexDirection:'column',gap:10,flex:1,overflowY:'auto' }}>
-                    {list.map(t=><TaskCard key={t.id} task={t} dragging={drag===t.id} onClick={()=>openEdit(t)} onDragStart={onDragStart} onDragEnd={()=>setDrag(null)}/>)}
-                    {!list.length && <div style={{ fontSize:12,color:C.textMuted,textAlign:'center',padding:'20px 0',border:`1px dashed ${C.border}`,borderRadius:10 }}>Drop here</div>}
-                  </div>
-                )}
+                <div style={{ display:'flex',flexDirection:'column',gap:10,flex:1,overflowY:'auto' }}>
+                  {list.map(t=><TaskCard key={t.id} task={t} dragging={drag===t.id} onClick={()=>openEdit(t)} onDragStart={onDragStart} onDragEnd={()=>setDrag(null)}/>)}
+                  {!list.length && <div style={{ fontSize:12,color:C.textMuted,textAlign:'center',padding:'20px 0',border:`1px dashed ${C.border}`,borderRadius:10 }}>Drop here</div>}
+                </div>
               </div>
             );
           })}
