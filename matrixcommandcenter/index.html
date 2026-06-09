@@ -388,6 +388,7 @@ function AppProvider({ children }){
   const [announce, setAnnounce] = useState(()=>lsLoad('announce',[]));
   const [toasts, setToasts] = useState([]);
   const [brief, setBrief] = useState(null);
+  const [picked, setPicked] = useState(false);   /* has the user chosen their character this session */
   const briefShown = useRef(false);
   const apptsRef = useRef([]); apptsRef.current = appts;
   const userRef = useRef(user); userRef.current = user;
@@ -530,17 +531,18 @@ function AppProvider({ children }){
   },[]);
 
   useEffect(()=>{
-    if(briefShown.current || loading) return;              /* wait for first GHL sync, fire once */
+    if(briefShown.current || loading || !picked) return;   /* wait for character pick + first GHL sync, fire once */
     briefShown.current = true;
     const t=setTimeout(()=>setBrief(buildBrief()), 700);   /* let the initial Supabase pull land */
     return ()=>clearTimeout(t);
-  },[loading, buildBrief]);
+  },[loading, picked, buildBrief]);
 
   const api = {
     page, setPage, user, setUser, toast, toasts, setToasts,
     appts, tasks, ideas, leads, goals, notifs, messages, announce,
     loading, ghlError, lastSync, contactCount, sync,
     revenue2026, setRevenue2026, brief, setBrief,
+    picked, chooseCharacter:(id)=>{ setUser(id); setPicked(true); },
 
     addAppt:(a)=>{ setAppts(p=>[...p,{...a,id:uid()}]); toast('Appointment scheduled'); },
     updateAppt:(id,patch)=>setAppts(p=>p.map(a=>a.id===id?{...a,...patch}:a)),
@@ -1245,11 +1247,14 @@ function DayView({ cursor, appts, onAppt, onSlot }){
 function TaskModal({ open, onClose, initial, asRequest }){
   const { addTask, updateTask, delTask, addComment, sendRequest, user } = useApp();
   const other = teamById(user==='habib'?'partner':'habib');
-  const blank={ title:'',desc:'',priority:'medium',due:TODAY,assignedTo:'habib',status:'not-started' };
+  const blank={ title:'',desc:'',priority:'medium',due:TODAY,assignedTo:user,status:'not-started' };
   const [f,setF]=useState(initial||blank);
   const [cm,setCm]=useState('');
   useEffect(()=>{ setF(initial||blank); setCm(''); },[initial,open]);
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  /* You can only assign to yourself or Both — to hand a task to your partner, send a request. */
+  const assignOpts=[teamById(user),BOTH];
+  if(f.assignedTo && !assignOpts.some(o=>o.id===f.assignedTo)) assignOpts.unshift(teamById(f.assignedTo));
   const save=()=>{ if(!f.title)return;
     if(asRequest){ sendRequest({ title:f.title,desc:f.desc,priority:f.priority,due:f.due }); }
     else if(initial){ updateTask(initial.id,f); }
@@ -1292,8 +1297,9 @@ function TaskModal({ open, onClose, initial, asRequest }){
         {!asRequest && (
         <Field label="Assigned To">
           <select value={f.assignedTo} onChange={e=>set('assignedTo',e.target.value)}>
-            {ASSIGNEES.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+            {assignOpts.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
+          <p style={{ fontSize:11,color:C.textMuted,marginTop:5 }}>To give it to {other.name}, send a task request instead.</p>
         </Field>
         )}
       </div>
@@ -2248,6 +2254,51 @@ function Topbar(){
 
 const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, ideas:Ideas, finance:Finance, goals:Goals, team:Team, reports:Reports, notifications:Notifications };
 
+function CharacterSelect(){
+  const { picked, chooseCharacter } = useApp();
+  const [hov,setHov]=useState(null);
+  if(picked) return null;
+  const chars=[
+    { id:'habib',   title:'Darth Habib',   sub:'Sith Lord of the Detail',     color:C.red,   glow:'rgba(255,90,90,.55)',  tag:'THE DARK SIDE' },
+    { id:'partner', title:'Padawan Ryan',  sub:'Apprentice of the Shine',     color:C.green, glow:'rgba(34,211,107,.5)',  tag:'THE LIGHT SIDE' },
+  ];
+  return (
+    <div className="fade-in" style={{ position:'fixed',inset:0,zIndex:400,
+      background:'radial-gradient(circle at 50% 25%, #0c120f, #04060a 72%)',
+      display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:24,overflow:'auto' }}>
+      <div style={{ textAlign:'center',marginBottom:34 }}>
+        <div style={{ fontSize:12,letterSpacing:4,color:C.textMuted,fontWeight:700 }}>MATRIX COMMAND CENTER</div>
+        <h1 style={{ fontSize:'clamp(26px,5vw,44px)',fontWeight:800,margin:'10px 0 4px',letterSpacing:-.5,
+          background:'linear-gradient(90deg,#ff5a5a,#fff 50%,#22d36b)',WebkitBackgroundClip:'text',backgroundClip:'text',color:'transparent' }}>Choose Your Character</h1>
+        <p style={{ color:C.textDim,fontSize:14 }}>Who's at the controls?</p>
+      </div>
+      <div style={{ display:'flex',gap:24,flexWrap:'wrap',justifyContent:'center' }}>
+        {chars.map(c=>{ const on=hov===c.id;
+          return (
+          <button key={c.id} onClick={()=>chooseCharacter(c.id)}
+            onMouseEnter={()=>setHov(c.id)} onMouseLeave={()=>setHov(null)}
+            style={{ width:262,padding:'30px 24px',borderRadius:20,cursor:'pointer',textAlign:'center',
+              background:C.bg2,border:`1px solid ${c.color}${on?'aa':'55'}`,
+              boxShadow:on?`0 0 0 1px ${c.color}55, 0 22px 60px ${c.glow}`:`0 0 0 1px ${c.color}22, 0 18px 50px rgba(0,0,0,.5)`,
+              transform:on?'translateY(-6px)':'none',transition:'transform .16s, box-shadow .16s, border-color .16s' }}>
+            <div style={{ fontSize:11,letterSpacing:2,fontWeight:800,color:c.color,marginBottom:18 }}>{c.tag}</div>
+            <div style={{ position:'relative',width:96,height:96,margin:'0 auto 18px' }}>
+              <div style={{ position:'absolute',inset:-6,borderRadius:'50%',background:`radial-gradient(circle, ${c.glow}, transparent 70%)`,
+                filter:'blur(6px)',opacity:on?1:.7,transition:'opacity .16s' }}/>
+              <div style={{ position:'relative' }}><Avatar id={c.id} size={96} ring/></div>
+            </div>
+            <div style={{ width:90,height:6,margin:'0 auto 18px',borderRadius:4,background:c.color,
+              boxShadow:`0 0 16px ${c.color}, 0 0 4px #fff` }}/>
+            <div style={{ fontSize:22,fontWeight:800,color:C.text }}>{c.title}</div>
+            <div style={{ fontSize:12.5,color:C.textDim,marginTop:4 }}>{c.sub}</div>
+          </button>
+        ); })}
+      </div>
+      <p style={{ marginTop:30,fontSize:12,color:C.textMuted }}>You can switch anytime from the top bar.</p>
+    </div>
+  );
+}
+
 function Brief(){
   const { brief, setBrief } = useApp();
   if(!brief) return null;
@@ -2344,6 +2395,7 @@ function Shell(){
       <MobileNav/>
       <Brief/>
       <Toasts/>
+      <CharacterSelect/>
     </>
   );
 }
