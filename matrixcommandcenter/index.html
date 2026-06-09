@@ -387,6 +387,10 @@ function AppProvider({ children }){
   const [messages, setMessages] = useState(()=>lsLoad('messages',[]));
   const [announce, setAnnounce] = useState(()=>lsLoad('announce',[]));
   const [toasts, setToasts] = useState([]);
+  const [brief, setBrief] = useState(null);
+  const briefShown = useRef(false);
+  const apptsRef = useRef([]); apptsRef.current = appts;
+  const userRef = useRef(user); userRef.current = user;
 
   useEffect(()=>{ lsSave('tasks',tasks); },[tasks]);
   useEffect(()=>{ lsSave('ideas',ideas); },[ideas]);
@@ -495,11 +499,48 @@ function AppProvider({ children }){
 
   useEffect(()=>{ sync(false); const t=setInterval(()=>sync(false),300000); return ()=>clearInterval(t); },[sync]);
 
+  /* ---- Daily brief: one-shot startup summary (due today / recent changes / details today) ---- */
+  const buildBrief = useCallback(()=>{
+    const u = userRef.current;
+    const ts = stateRef.current.tasks || [];
+    const aps = apptsRef.current || [];
+    const snapKey = 'briefSeen.'+u;
+    const snap = lsLoad(snapKey, null);
+    const prev = snap && snap.ids;                         /* {id:status} from last visit (this device+user) */
+    const isNew  = id => prev && !(id in prev);
+    const justDone = t => prev && t.status==='completed' && prev[t.id] && prev[t.id]!=='completed';
+
+    const active = ts.filter(t=>!(t.request && t.request.status==='pending'));
+    const due = active.filter(t=>t.due===TODAY && t.status!=='completed');
+    const dueBy = {
+      habib:   due.filter(t=>t.assignedTo==='habib'),
+      partner: due.filter(t=>t.assignedTo==='partner'),
+      both:    due.filter(t=>t.assignedTo==='both'),
+    };
+    const added     = prev ? ts.filter(t=>!t.request && isNew(t.id)) : [];
+    const completed = prev ? ts.filter(t=>justDone(t)) : [];
+    const requests  = prev ? ts.filter(t=>t.request && isNew(t.id)) : [];
+    const detailsToday = aps.filter(a=>a.date===TODAY && a.status!=='cancelled')
+                            .sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+
+    const ids={}; ts.forEach(t=>{ ids[t.id]=t.status; });
+    lsSave(snapKey, { ts:Date.now(), ids });               /* consume: reopening won't re-report */
+
+    return { dueBy, added, completed, requests, detailsToday, firstRun: !prev };
+  },[]);
+
+  useEffect(()=>{
+    if(briefShown.current || loading) return;              /* wait for first GHL sync, fire once */
+    briefShown.current = true;
+    const t=setTimeout(()=>setBrief(buildBrief()), 700);   /* let the initial Supabase pull land */
+    return ()=>clearTimeout(t);
+  },[loading, buildBrief]);
+
   const api = {
     page, setPage, user, setUser, toast, toasts, setToasts,
     appts, tasks, ideas, leads, goals, notifs, messages, announce,
     loading, ghlError, lastSync, contactCount, sync,
-    revenue2026, setRevenue2026,
+    revenue2026, setRevenue2026, brief, setBrief,
 
     addAppt:(a)=>{ setAppts(p=>[...p,{...a,id:uid()}]); toast('Appointment scheduled'); },
     updateAppt:(id,patch)=>setAppts(p=>p.map(a=>a.id===id?{...a,...patch}:a)),
@@ -2207,6 +2248,89 @@ function Topbar(){
 
 const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, ideas:Ideas, finance:Finance, goals:Goals, team:Team, reports:Reports, notifications:Notifications };
 
+function Brief(){
+  const { brief, setBrief } = useApp();
+  if(!brief) return null;
+  const { dueBy, added, completed, requests, detailsToday, firstRun } = brief;
+  const close=()=>setBrief(null);
+
+  const Line=({t})=>(
+    <div style={{ display:'flex',alignItems:'center',gap:9,padding:'5px 0' }}>
+      <Avatar id={t.assignedTo||'habib'} size={20}/>
+      <span style={{ fontSize:13,color:C.text,flex:1,minWidth:0 }} className="clamp1">{t.title}</span>
+    </div>
+  );
+  const Section=({icon,color,title,children})=>(
+    <div style={{ marginBottom:16 }}>
+      <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:8 }}>
+        <span style={{ width:26,height:26,borderRadius:8,background:color+'22',display:'grid',placeItems:'center' }}>
+          <Icon name={icon} size={15} color={color}/></span>
+        <span style={{ fontSize:12,fontWeight:800,letterSpacing:.4,textTransform:'uppercase',color:C.textDim }}>{title}</span>
+      </div>
+      {children}
+    </div>
+  );
+  const PersonDue=({id})=>{
+    const list=dueBy[id]||[];
+    return (
+      <div style={{ marginBottom:8 }}>
+        <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:2 }}>
+          <Avatar id={id} size={22}/>
+          <span style={{ fontSize:13.5,fontWeight:700,color:teamById(id).color }}>{teamById(id).name}</span>
+          <span style={{ fontSize:12,color:C.textMuted }}>{list.length?list.length+' due':'nothing due'}</span>
+        </div>
+        {list.map(t=><Line key={t.id} t={t}/>)}
+      </div>
+    );
+  };
+  const noChanges = !added.length && !completed.length && !requests.length;
+
+  return (
+    <Modal open={true} onClose={close} title="Daily Brief" width={560}
+      footer={<Btn onClick={close}>Got it</Btn>}>
+      <div style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 16px',marginBottom:18,
+        background:C.cyanDim,border:`1px solid ${C.border}`,borderRadius:14 }}>
+        <span style={{ fontSize:34,fontWeight:800,color:C.cyanBright,lineHeight:1 }}>{detailsToday.length}</span>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:14,fontWeight:700,color:C.text }}>{detailsToday.length===1?'detail':'details'} on the calendar today</div>
+          <div style={{ fontSize:12,color:C.textDim }} className="clamp1">{detailsToday.length
+            ? detailsToday.slice(0,4).map(a=>a.time+' '+a.customer).join(' · ')+(detailsToday.length>4?' …':'')
+            : 'No jobs booked for today yet'}</div>
+        </div>
+      </div>
+
+      <Section icon="check" color={C.cyan} title="Due today">
+        <PersonDue id="habib"/>
+        <PersonDue id="partner"/>
+        {(dueBy.both||[]).length>0 && <PersonDue id="both"/>}
+      </Section>
+
+      <Section icon="bell" color={C.gold} title="Since you last checked">
+        {firstRun && <p style={{ fontSize:12.5,color:C.textMuted }}>First time opening the brief - tracking changes from here on.</p>}
+        {!firstRun && noChanges && <p style={{ fontSize:12.5,color:C.textMuted }}>No changes since your last visit.</p>}
+        {completed.length>0 && <>
+          <div style={{ fontSize:12,fontWeight:700,color:C.green,margin:'6px 0 2px' }}>Completed ({completed.length})</div>
+          {completed.map(t=><Line key={t.id} t={t}/>)}
+        </>}
+        {added.length>0 && <>
+          <div style={{ fontSize:12,fontWeight:700,color:C.cyan,margin:'8px 0 2px' }}>Added ({added.length})</div>
+          {added.map(t=><Line key={t.id} t={t}/>)}
+        </>}
+        {requests.length>0 && <>
+          <div style={{ fontSize:12,fontWeight:700,color:C.gold,margin:'8px 0 2px' }}>Requests ({requests.length})</div>
+          {requests.map(t=>(
+            <div key={t.id} style={{ display:'flex',alignItems:'center',gap:9,padding:'5px 0' }}>
+              <Avatar id={t.request.to} size={20}/>
+              <span style={{ fontSize:13,color:C.text,flex:1,minWidth:0 }} className="clamp1">{t.title}</span>
+              <span style={{ fontSize:11,color:C.textMuted,whiteSpace:'nowrap' }}>{teamById(t.request.from).name} -&gt; {teamById(t.request.to).name}</span>
+            </div>
+          ))}
+        </>}
+      </Section>
+    </Modal>
+  );
+}
+
 function Shell(){
   const { page } = useApp();
   const Page=PAGES[page]||Dashboard;
@@ -2218,6 +2342,7 @@ function Shell(){
         <Page/>
       </main>
       <MobileNav/>
+      <Brief/>
       <Toasts/>
     </>
   );
