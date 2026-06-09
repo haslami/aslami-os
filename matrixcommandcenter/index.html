@@ -77,6 +77,7 @@
 
   .clamp1{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
   .clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .clamp3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 
   .mobile-nav{display:none}
   @media(max-width:860px){
@@ -126,20 +127,39 @@ const TEAM = [
   { id:'habib',   name:'Habib', role:'Owner', color:'#1fc56a', initials:'H' },
   { id:'partner', name:'Ryan',  role:'Owner', color:'#e0b73c', initials:'R' },
 ];
-const teamById = id => TEAM.find(t=>t.id===id) || { name:'Unassigned', color:'#8aa395', initials:'?' };
+const BOTH = { id:'both', name:'Both', color:'#37c8d4', initials:'B' };
+const teamById = id => id==='both' ? BOTH : (TEAM.find(t=>t.id===id) || { name:'Unassigned', color:'#8aa395', initials:'?' });
+/* assignee chips/options: each partner plus a shared "Both" */
+const ASSIGNEES = [...TEAM, BOTH];
 
 const PRIORITY = { high:{label:'High',color:'#ff5a5a'}, medium:{label:'Medium',color:'#e0b73c'}, low:{label:'Low',color:'#8aa395'} };
+const PRIO_RANK = { high:0, medium:1, low:2 };
 const TASK_COLS = [
   { id:'not-started', label:'Not Started', color:'#8aa395' },
   { id:'in-progress', label:'In Progress', color:'#1fc56a' },
   { id:'waiting',     label:'Waiting',     color:'#e0b73c' },
   { id:'completed',   label:'Completed',   color:'#22d36b' },
 ];
+const TASK_SORTS = [
+  { id:'priority', label:'Priority' },
+  { id:'due',      label:'Due date' },
+  { id:'created',  label:'Date added' },
+  { id:'title',    label:'Title A-Z' },
+];
+function sortTasks(list, key){
+  const a=[...list];
+  if(key==='due')       a.sort((x,y)=>(x.due||'9999-99-99').localeCompare(y.due||'9999-99-99') || (PRIO_RANK[x.priority]-PRIO_RANK[y.priority]));
+  else if(key==='created') a.sort((x,y)=>(y.created||0)-(x.created||0));
+  else if(key==='title')   a.sort((x,y)=>(x.title||'').localeCompare(y.title||''));
+  else /* priority */      a.sort((x,y)=>(PRIO_RANK[x.priority]-PRIO_RANK[y.priority]) || (x.due||'9999-99-99').localeCompare(y.due||'9999-99-99'));
+  return a;
+}
 
 const NAV = [
   { id:'dashboard',     label:'Command Center', icon:'home' },
   { id:'schedule',      label:'Schedule',       icon:'calendar' },
   { id:'tasks',         label:'Tasks',          icon:'check' },
+  { id:'ideas',         label:'Ideas',          icon:'bulb' },
   { id:'finance',       label:'Finance',        icon:'chart' },
   { id:'goals',         label:'Goals',          icon:'target' },
   { id:'team',          label:'Team',           icon:'message' },
@@ -360,6 +380,7 @@ function AppProvider({ children }){
   const [lastSync, setLastSync] = useState(null);
   /* Local workspaces (user-managed; not numbers) */
   const [tasks, setTasks] = useState(()=>lsLoad('tasks',[]));
+  const [ideas, setIdeas] = useState(()=>lsLoad('ideas',[]));
   const [goals, setGoals] = useState(()=>lsLoad('goals',[]));
   const [revenue2026, setRevenue2026] = useState(()=>lsLoad('revenue2026',null));
   const [notifs, setNotifs] = useState([]);
@@ -368,6 +389,7 @@ function AppProvider({ children }){
   const [toasts, setToasts] = useState([]);
 
   useEffect(()=>{ lsSave('tasks',tasks); },[tasks]);
+  useEffect(()=>{ lsSave('ideas',ideas); },[ideas]);
   useEffect(()=>{ lsSave('goals',goals); },[goals]);
   useEffect(()=>{ lsSave('revenue2026',revenue2026); },[revenue2026]);
   useEffect(()=>{ lsSave('messages',messages); },[messages]);
@@ -382,9 +404,9 @@ function AppProvider({ children }){
   /* always-current snapshot of synced state, so applyRemote can merge against
      it (remote rows may omit some keys) without stale-closure values. */
   const stateRef = useRef({});
-  stateRef.current = { tasks, goals, revenue2026, messages, announce };
+  stateRef.current = { tasks, ideas, goals, revenue2026, messages, announce };
   const serializeSync = (s)=>JSON.stringify({
-    tasks:s.tasks, goals:s.goals, revenue2026:s.revenue2026, messages:s.messages, announce:s.announce,
+    tasks:s.tasks, ideas:s.ideas, goals:s.goals, revenue2026:s.revenue2026, messages:s.messages, announce:s.announce,
   });
 
   const applyRemote = useCallback((row)=>{
@@ -395,6 +417,7 @@ function AppProvider({ children }){
     const d = row.data;
     const merged = { ...stateRef.current };
     if(Array.isArray(d.tasks)){ setTasks(d.tasks); merged.tasks = d.tasks; }
+    if(Array.isArray(d.ideas)){ setIdeas(d.ideas); merged.ideas = d.ideas; }
     if(Array.isArray(d.goals)){ setGoals(d.goals); merged.goals = d.goals; }
     if(Array.isArray(d.messages)){ setMessages(d.messages); merged.messages = d.messages; }
     if(Array.isArray(d.announce)){ setAnnounce(d.announce); merged.announce = d.announce; }
@@ -431,7 +454,7 @@ function AppProvider({ children }){
   /* debounced push whenever synced state changes locally */
   useEffect(()=>{
     if(!supa) return;
-    const payload = serializeSync({ tasks, goals, revenue2026, messages, announce });
+    const payload = serializeSync({ tasks, ideas, goals, revenue2026, messages, announce });
     /* first run: adopt current state as baseline, nothing to push yet */
     if(lastSyncedRef.current === null){ lastSyncedRef.current = payload; return; }
     /* unchanged vs last sync (incl. echoes of our own / remote writes): skip */
@@ -446,7 +469,7 @@ function AppProvider({ children }){
       }catch(e){}
     }, 800);
     return ()=>{ if(pushTimer.current) clearTimeout(pushTimer.current); };
-  },[tasks, goals, revenue2026, messages, announce]);
+  },[tasks, ideas, goals, revenue2026, messages, announce]);
 
   const toast = useCallback((msg, kind='success')=>{
     const id = uid();
@@ -474,7 +497,7 @@ function AppProvider({ children }){
 
   const api = {
     page, setPage, user, setUser, toast, toasts, setToasts,
-    appts, tasks, leads, goals, notifs, messages, announce,
+    appts, tasks, ideas, leads, goals, notifs, messages, announce,
     loading, ghlError, lastSync, contactCount, sync,
     revenue2026, setRevenue2026,
 
@@ -486,6 +509,25 @@ function AppProvider({ children }){
     updateTask:(id,patch)=>setTasks(p=>p.map(t=>t.id===id?{...t,...patch}:t)),
     delTask:(id)=>{ setTasks(p=>p.filter(t=>t.id!==id)); toast('Task deleted','info'); },
     addComment:(id,text)=>setTasks(p=>p.map(t=>t.id===id?{...t,comments:[...t.comments,{by:user,text,ts:Date.now()}]}:t)),
+
+    /* Task requests: send a task to the other partner to accept/decline */
+    sendRequest:(t)=>{ const to=user==='habib'?'partner':'habib';
+      setTasks(p=>[...p,{...t,id:uid(),created:Date.now(),comments:[],assignedTo:to,status:'not-started',request:{status:'pending',from:user,to}}]);
+      toast('Request sent to '+teamById(to).name); },
+    acceptRequest:(id)=>{ setTasks(p=>p.map(t=>t.id===id?{...t,request:null}:t)); toast('Request accepted'); },
+    declineRequest:(id)=>setTasks(p=>p.map(t=>t.id===id?{...t,request:{...t.request,status:'declined'}}:t)),
+    resendRequest:(id)=>setTasks(p=>p.map(t=>t.id===id?{...t,request:{...t.request,status:'pending'}}:t)),
+    dismissRequest:(id)=>setTasks(p=>p.filter(t=>t.id!==id)),
+
+    /* Ideas: brainstorm board, comment/build, promote to a task */
+    addIdea:(i)=>{ setIdeas(p=>[{...i,id:uid(),by:user,created:Date.now(),comments:[]},...p]); toast('Idea posted'); },
+    updateIdea:(id,patch)=>setIdeas(p=>p.map(i=>i.id===id?{...i,...patch}:i)),
+    delIdea:(id)=>{ setIdeas(p=>p.filter(i=>i.id!==id)); toast('Idea removed','info'); },
+    addIdeaComment:(id,text)=>setIdeas(p=>p.map(i=>i.id===id?{...i,comments:[...(i.comments||[]),{by:user,text,ts:Date.now()}]}:i)),
+    promoteIdea:(id)=>{ const idea=ideas.find(i=>i.id===id); if(!idea)return;
+      setTasks(tp=>[...tp,{ id:uid(),title:idea.title,desc:idea.desc||'',priority:'medium',due:TODAY,
+        assignedTo:user,status:'not-started',created:Date.now(),comments:idea.comments||[] }]);
+      setIdeas(p=>p.filter(i=>i.id!==id)); toast('Idea promoted to task'); setPage('tasks'); },
 
     addGoal:(g)=>{ setGoals(p=>[...p,{...g,id:uid()}]); toast('Goal added'); },
     updateGoal:(id,patch)=>setGoals(p=>p.map(g=>g.id===id?{...g,...patch}:g)),
@@ -546,6 +588,9 @@ const ICONS = {
   settings:<><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></>,
   logout:<><path d="M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3"/><path d="M10 12H3M6 8l-3 4 3 4"/></>,
   flag:<><path d="M5 21V4"/><path d="M5 4h11l-2 3 2 3H5"/></>,
+  bulb:<><path d="M9 18h6"/><path d="M10 21h4"/><path d="M8.5 14a5 5 0 1 1 7 0c-.8.7-1.5 1.3-1.5 2.5h-4c0-1.2-.7-1.8-1.5-2.5Z"/></>,
+  inbox:<><path d="M3 12h5l2 3h4l2-3h5"/><path d="M5 5h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"/></>,
+  send:<><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7Z"/></>,
   zap:<><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8Z"/></>,
   alert:<><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></>,
   trophy:<><path d="M7 4h10v4a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3M9 20h6M10 16h4v4h-4z"/></>,
@@ -616,6 +661,18 @@ function Badge({ children, color=C.cyan, solid }){
 }
 
 function Avatar({ id, size=34, ring }){
+  if(id==='both'){
+    const a=teamById('habib'), b=teamById('partner'), c=size*0.7;
+    const cell=(m,left,z)=>(
+      <span style={{ position:'absolute',left,top:(size-c)/2,width:c,height:c,borderRadius:'50%',
+        display:'flex',alignItems:'center',justifyContent:'center',background:`${m.color}26`,color:m.color,
+        fontWeight:700,fontSize:c*0.42,border:`2px solid ${C.bg2}`,zIndex:z,letterSpacing:.3 }}>{m.initials}</span>);
+    return (
+      <span title="Both — Habib & Ryan" style={{ position:'relative',display:'inline-block',width:size+c*0.55,height:size,flex:'0 0 auto',verticalAlign:'middle' }}>
+        {cell(a,0,1)}{cell(b,c*0.55,2)}
+      </span>
+    );
+  }
   const m = teamById(id);
   return (
     <div style={{ width:size,height:size,borderRadius:'50%',flex:'0 0 auto',
@@ -1144,21 +1201,35 @@ function DayView({ cursor, appts, onAppt, onSlot }){
 /* ============================================================
    TASKS
    ============================================================ */
-function TaskModal({ open, onClose, initial }){
-  const { addTask, updateTask, delTask, addComment } = useApp();
+function TaskModal({ open, onClose, initial, asRequest }){
+  const { addTask, updateTask, delTask, addComment, sendRequest, user } = useApp();
+  const other = teamById(user==='habib'?'partner':'habib');
   const blank={ title:'',desc:'',priority:'medium',due:TODAY,assignedTo:'habib',status:'not-started' };
   const [f,setF]=useState(initial||blank);
   const [cm,setCm]=useState('');
   useEffect(()=>{ setF(initial||blank); setCm(''); },[initial,open]);
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  const save=()=>{ if(!f.title)return; initial?updateTask(initial.id,f):addTask(f); onClose(); };
+  const save=()=>{ if(!f.title)return;
+    if(asRequest){ sendRequest({ title:f.title,desc:f.desc,priority:f.priority,due:f.due }); }
+    else if(initial){ updateTask(initial.id,f); }
+    else { addTask(f); }
+    onClose(); };
   return (
-    <Modal open={open} onClose={onClose} title={initial?'Task Details':'New Task'} width={560}
+    <Modal open={open} onClose={onClose} title={asRequest?'Send Task Request':initial?'Task Details':'New Task'} width={560}
       footer={<>
-        {initial && <Btn variant="danger" icon="trash" onClick={()=>{delTask(initial.id);onClose();}} style={{ marginRight:'auto' }}>Delete</Btn>}
+        {initial && !asRequest && <Btn variant="danger" icon="trash" onClick={()=>{delTask(initial.id);onClose();}} style={{ marginRight:'auto' }}>Delete</Btn>}
         <Btn variant="dark" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={save}>{initial?'Save':'Create'}</Btn>
+        <Btn icon={asRequest?'send':undefined} onClick={save}>{asRequest?('Send to '+other.name):initial?'Save':'Create'}</Btn>
       </>}>
+      {asRequest && (
+        <div style={{ display:'flex',alignItems:'center',gap:10,background:`${other.color}14`,border:`1px solid ${other.color}40`,
+          borderRadius:10,padding:'10px 12px',marginBottom:14 }}>
+          <Avatar id={other.id} size={28}/>
+          <div style={{ fontSize:13 }}><span style={{ color:C.textDim }}>Requesting </span>
+            <span style={{ fontWeight:700,color:other.color }}>{other.name}</span>
+            <span style={{ color:C.textDim }}> to take this on — they can accept or decline.</span></div>
+        </div>
+      )}
       <Field label="Title"><input value={f.title} onChange={e=>set('title',e.target.value)} placeholder="What needs doing?"/></Field>
       <Field label="Description"><textarea rows={2} value={f.desc} onChange={e=>set('desc',e.target.value)} placeholder="Details..."/></Field>
       <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
@@ -1167,19 +1238,23 @@ function TaskModal({ open, onClose, initial }){
             {Object.entries(PRIORITY).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
           </select>
         </Field>
+        {!asRequest && (
         <Field label="Status">
           <select value={f.status} onChange={e=>set('status',e.target.value)}>
             {TASK_COLS.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
         </Field>
+        )}
       </div>
       <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
         <Field label="Due Date"><input type="date" value={f.due} onChange={e=>set('due',e.target.value)}/></Field>
+        {!asRequest && (
         <Field label="Assigned To">
           <select value={f.assignedTo} onChange={e=>set('assignedTo',e.target.value)}>
-            {TEAM.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+            {ASSIGNEES.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         </Field>
+        )}
       </div>
       {initial && (
         <div style={{ marginTop:8 }}>
@@ -1255,10 +1330,55 @@ function TaskCard({ task, onClick, onDragStart, onDragEnd, dragging }){
   );
 }
 
+function RequestCard({ task, direction }){
+  const { acceptRequest, declineRequest, resendRequest, dismissRequest } = useApp();
+  const r=task.request; const p=PRIORITY[task.priority];
+  const fromM=teamById(r.from), toM=teamById(r.to);
+  const declined=r.status==='declined';
+  return (
+    <div style={{ background:C.bg2,border:`1px solid ${declined?C.red+'44':C.border}`,borderRadius:12,padding:14,
+      borderLeft:`3px solid ${declined?C.red:p.color}` }}>
+      <div style={{ display:'flex',justifyContent:'space-between',gap:8,marginBottom:6 }}>
+        <span style={{ fontSize:14,fontWeight:700 }}>{task.title}</span>
+        <Badge color={p.color}>{p.label}</Badge>
+      </div>
+      {task.desc && <p style={{ fontSize:12.5,color:C.textDim,marginBottom:10 }}>{task.desc}</p>}
+      <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:direction==='incoming'||declined?12:0 }}>
+        <DueChip due={task.due} status={task.status}/>
+        <span style={{ marginLeft:'auto',fontSize:12,color:C.textDim,display:'inline-flex',alignItems:'center',gap:6 }}>
+          {direction==='incoming'
+            ? <><Avatar id={r.from} size={20}/> from {fromM.name}</>
+            : declined
+              ? <span style={{ color:C.red,fontWeight:700 }}>Declined by {toM.name}</span>
+              : <><Avatar id={r.to} size={20}/> awaiting {toM.name}</>}
+        </span>
+      </div>
+      {direction==='incoming' && (
+        <div style={{ display:'flex',gap:8 }}>
+          <Btn size="sm" icon="check" onClick={()=>acceptRequest(task.id)}>Accept</Btn>
+          <Btn size="sm" variant="dark" onClick={()=>declineRequest(task.id)}>Decline</Btn>
+        </div>
+      )}
+      {direction==='outgoing' && declined && (
+        <div style={{ display:'flex',gap:8 }}>
+          <Btn size="sm" variant="soft" icon="send" onClick={()=>resendRequest(task.id)}>Send again</Btn>
+          <Btn size="sm" variant="danger" icon="trash" onClick={()=>dismissRequest(task.id)}>Dismiss</Btn>
+        </div>
+      )}
+      {direction==='outgoing' && !declined && (
+        <button onClick={()=>dismissRequest(task.id)} style={{ marginTop:10,fontSize:12,color:C.textDim,background:'none' }}>Cancel request</button>
+      )}
+    </div>
+  );
+}
+
 function Tasks(){
-  const { tasks, updateTask } = useApp();
+  const { tasks, updateTask, user } = useApp();
+  const [tab,setTab]=useState('board');
   const [view,setView]=useState('kanban');
+  const [sortKey,setSortKey]=useState('priority');
   const [modal,setModal]=useState(false);
+  const [reqModal,setReqModal]=useState(false);
   const [editing,setEditing]=useState(null);
   const [drag,setDrag]=useState(null);
   const [over,setOver]=useState(null);
@@ -1266,7 +1386,14 @@ function Tasks(){
   const [collapsedCols,setCollapsedCols]=useState({ completed:true });
   const toggleCol=(id)=>setCollapsedCols(c=>({ ...c, [id]:!c[id] }));
 
-  const shown=tasks.filter(t=>filterWho==='all'||t.assignedTo===filterWho);
+  /* board = real tasks (pending/declined requests live in the Requests tab) */
+  const boardTasks=sortTasks(
+    tasks.filter(t=>!t.request && (filterWho==='all'||t.assignedTo===filterWho)),
+    sortKey);
+  const reqs=tasks.filter(t=>t.request);
+  const incoming=reqs.filter(t=>t.request.status==='pending' && t.request.to===user);
+  const outgoing=reqs.filter(t=>t.request.from===user && (t.request.status==='pending'||t.request.status==='declined'));
+
   const openNew=()=>{ setEditing(null); setModal(true); };
   const openEdit=(t)=>{ setEditing(t); setModal(true); };
 
@@ -1276,14 +1403,31 @@ function Tasks(){
   return (
     <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1,display:'flex',flexDirection:'column' }}>
       <PageHead title="Tasks" sub="Shared board · drag cards between columns"
-        actions={<Btn icon="plus" onClick={openNew}>New Task</Btn>}/>
+        actions={tab==='board'
+          ? <Btn icon="plus" onClick={openNew}>New Task</Btn>
+          : <Btn icon="send" onClick={()=>setReqModal(true)}>New Request</Btn>}/>
 
+      <div style={{ display:'flex',gap:6,marginBottom:16,borderBottom:`1px solid ${C.border}` }}>
+        {[{id:'board',label:'Board',icon:'check'},{id:'requests',label:'Requests',icon:'inbox'}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{ display:'inline-flex',alignItems:'center',gap:7,
+            padding:'9px 16px',fontSize:13.5,fontWeight:700,background:'none',position:'relative',
+            color:tab===t.id?C.cyan:C.textDim,borderBottom:`2px solid ${tab===t.id?C.cyan:'transparent'}`,marginBottom:-1 }}>
+            <Icon name={t.icon} size={16} color={tab===t.id?C.cyan:'currentColor'}/>{t.label}
+            {t.id==='requests' && incoming.length>0 &&
+              <span style={{ fontSize:10.5,fontWeight:800,color:'#06090c',background:C.gold,borderRadius:20,padding:'1px 6px',minWidth:17,textAlign:'center' }}>{incoming.length}</span>}
+          </button>
+        ))}
+      </div>
+
+      {tab==='requests' ? (
+        <RequestsView incoming={incoming} outgoing={outgoing}/>
+      ) : (<>
       <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:12 }}>
-        <div style={{ display:'flex',gap:8,alignItems:'center' }}>
+        <div style={{ display:'flex',gap:8,alignItems:'center',flexWrap:'wrap' }}>
           <span style={{ fontSize:12,color:C.textDim }}>Assignee:</span>
           <button onClick={()=>setFilterWho('all')} style={{ padding:'6px 12px',borderRadius:8,fontSize:12.5,fontWeight:600,
             background:filterWho==='all'?C.cyanDim:C.bg2,color:filterWho==='all'?C.cyan:C.textDim,border:`1px solid ${C.border}` }}>All</button>
-          {TEAM.map(t=>(
+          {ASSIGNEES.map(t=>(
             <button key={t.id} onClick={()=>setFilterWho(t.id)} style={{ padding:'5px 10px',borderRadius:8,fontSize:12.5,fontWeight:600,
               display:'inline-flex',alignItems:'center',gap:6,
               background:filterWho===t.id?`${t.color}22`:C.bg2,color:filterWho===t.id?t.color:C.textDim,border:`1px solid ${C.border}` }}>
@@ -1291,18 +1435,27 @@ function Tasks(){
             </button>
           ))}
         </div>
-        <div style={{ display:'flex',background:C.bg2,borderRadius:10,padding:4,border:`1px solid ${C.border}` }}>
-          {['kanban','list'].map(v=>(
-            <button key={v} onClick={()=>setView(v)} style={{ padding:'7px 16px',borderRadius:7,fontSize:13,fontWeight:600,textTransform:'capitalize',
-              background:view===v?'linear-gradient(135deg,#1fc56a,#e0b73c)':'transparent',color:view===v?'#06090c':C.textDim }}>{v}</button>
-          ))}
+        <div style={{ display:'flex',gap:10,alignItems:'center' }}>
+          <div style={{ display:'inline-flex',alignItems:'center',gap:6 }}>
+            <span style={{ fontSize:12,color:C.textDim }}>Sort:</span>
+            <select value={sortKey} onChange={e=>setSortKey(e.target.value)}
+              style={{ background:C.bg2,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,padding:'7px 10px',fontSize:12.5,fontWeight:600 }}>
+              {TASK_SORTS.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+          </div>
+          <div style={{ display:'flex',background:C.bg2,borderRadius:10,padding:4,border:`1px solid ${C.border}` }}>
+            {['kanban','list'].map(v=>(
+              <button key={v} onClick={()=>setView(v)} style={{ padding:'7px 16px',borderRadius:7,fontSize:13,fontWeight:600,textTransform:'capitalize',
+                background:view===v?'linear-gradient(135deg,#1fc56a,#e0b73c)':'transparent',color:view===v?'#06090c':C.textDim }}>{v}</button>
+            ))}
+          </div>
         </div>
       </div>
 
       {view==='kanban' ? (
         <div style={{ display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,flex:1,minHeight:0,alignItems:'start' }} className="grid-resp">
           {TASK_COLS.map(col=>{
-            const list=shown.filter(t=>t.status===col.id);
+            const list=boardTasks.filter(t=>t.status===col.id);
             const collapsed=!!collapsedCols[col.id];
             return (
               <div key={col.id}
@@ -1332,12 +1485,12 @@ function Tasks(){
         </div>
       ) : (
         <Card pad={0} style={{ overflow:'hidden' }}>
-          {shown.map((t,i)=>{ const p=PRIORITY[t.priority]; const col=TASK_COLS.find(c=>c.id===t.status);
+          {boardTasks.map((t,i)=>{ const p=PRIORITY[t.priority]; const col=TASK_COLS.find(c=>c.id===t.status);
             const active=t.status!=='completed'; const high=t.priority==='high'&&active;
             const urgent=dueMeta(t.due,t.status).level==='overdue'; const flag=high||urgent;
             return (
               <div key={t.id} onClick={()=>openEdit(t)} style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 18px',
-                borderBottom:i<shown.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',
+                borderBottom:i<boardTasks.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',
                 background:flag?`linear-gradient(90deg, ${C.red}12, transparent 40%)`:'transparent',
                 borderLeft:`${flag?4:3}px solid ${high?C.red:p.color}` }}
                 onMouseEnter={e=>e.currentTarget.style.background=C.bg2}
@@ -1353,10 +1506,134 @@ function Tasks(){
                 <Avatar id={t.assignedTo} size={28}/>
               </div>
             ); })}
+          {!boardTasks.length && <div style={{ padding:'40px 0',textAlign:'center',fontSize:13,color:C.textMuted }}>No tasks here yet.</div>}
         </Card>
       )}
+      </>)}
 
       <TaskModal open={modal} onClose={()=>setModal(false)} initial={editing}/>
+      <TaskModal open={reqModal} onClose={()=>setReqModal(false)} asRequest/>
+    </div>
+  );
+}
+
+function RequestsView({ incoming, outgoing }){
+  const empty=!incoming.length && !outgoing.length;
+  return (
+    <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,alignItems:'start' }} className="grid-resp">
+      <div>
+        <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12 }}>
+          <Icon name="inbox" size={17} color={C.cyan}/>
+          <span style={{ fontSize:14,fontWeight:700 }}>Needs your response</span>
+          <span style={{ fontSize:12,fontWeight:700,color:C.textDim,background:C.bg3,padding:'2px 9px',borderRadius:20 }}>{incoming.length}</span>
+        </div>
+        <div style={{ display:'flex',flexDirection:'column',gap:12 }}>
+          {incoming.map(t=><RequestCard key={t.id} task={t} direction="incoming"/>)}
+          {!incoming.length && <div style={{ fontSize:12.5,color:C.textMuted,padding:'24px 0',textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:12 }}>No requests waiting on you.</div>}
+        </div>
+      </div>
+      <div>
+        <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12 }}>
+          <Icon name="send" size={16} color={C.gold}/>
+          <span style={{ fontSize:14,fontWeight:700 }}>Sent by you</span>
+          <span style={{ fontSize:12,fontWeight:700,color:C.textDim,background:C.bg3,padding:'2px 9px',borderRadius:20 }}>{outgoing.length}</span>
+        </div>
+        <div style={{ display:'flex',flexDirection:'column',gap:12 }}>
+          {outgoing.map(t=><RequestCard key={t.id} task={t} direction="outgoing"/>)}
+          {!outgoing.length && <div style={{ fontSize:12.5,color:C.textMuted,padding:'24px 0',textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:12 }}>You haven't sent any requests.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   IDEAS
+   ============================================================ */
+function IdeaModal({ open, onClose, initial }){
+  const { addIdea, updateIdea, delIdea, addIdeaComment, promoteIdea } = useApp();
+  const blank={ title:'',desc:'' };
+  const [f,setF]=useState(initial||blank);
+  const [cm,setCm]=useState('');
+  useEffect(()=>{ setF(initial||blank); setCm(''); },[initial,open]);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{ if(!f.title)return; initial?updateIdea(initial.id,{title:f.title,desc:f.desc}):addIdea(f); onClose(); };
+  return (
+    <Modal open={open} onClose={onClose} title={initial?'Idea':'New Idea'} width={560}
+      footer={<>
+        {initial && <Btn variant="danger" icon="trash" onClick={()=>{delIdea(initial.id);onClose();}} style={{ marginRight:'auto' }}>Delete</Btn>}
+        {initial && <Btn variant="soft" icon="check" onClick={()=>{promoteIdea(initial.id);onClose();}}>Promote to Task</Btn>}
+        <Btn variant="dark" onClick={onClose}>Close</Btn>
+        <Btn onClick={save}>{initial?'Save':'Post'}</Btn>
+      </>}>
+      <Field label="Idea"><input value={f.title} onChange={e=>set('title',e.target.value)} placeholder="What's the idea?"/></Field>
+      <Field label="Details / brainstorm"><textarea rows={4} value={f.desc} onChange={e=>set('desc',e.target.value)} placeholder="Flesh it out, notes, pros/cons..."/></Field>
+      {initial && (
+        <div style={{ marginTop:8 }}>
+          <label>Build on it</label>
+          <div style={{ display:'flex',flexDirection:'column',gap:8,marginBottom:10 }}>
+            {(initial.comments||[]).map((c,i)=>(
+              <div key={i} style={{ display:'flex',gap:8,alignItems:'flex-start' }}>
+                <Avatar id={c.by} size={26}/>
+                <div style={{ background:C.bg3,borderRadius:9,padding:'7px 11px',fontSize:13,flex:1 }}>
+                  <span style={{ fontWeight:700,color:teamById(c.by).color }}>{teamById(c.by).name}</span>
+                  <span style={{ color:C.textMuted,fontSize:11,marginLeft:6 }}>{relTime(c.ts)}</span>
+                  <div style={{ marginTop:2 }}>{c.text}</div>
+                </div>
+              </div>
+            ))}
+            {!(initial.comments||[]).length && <p style={{ fontSize:12,color:C.textMuted }}>No notes yet — start building on this idea.</p>}
+          </div>
+          <div style={{ display:'flex',gap:8 }}>
+            <input value={cm} onChange={e=>setCm(e.target.value)} placeholder="Add a thought..." onKeyDown={e=>{if(e.key==='Enter'&&cm.trim()){addIdeaComment(initial.id,cm.trim());setCm('');}}}/>
+            <Btn variant="soft" onClick={()=>{if(cm.trim()){addIdeaComment(initial.id,cm.trim());setCm('');}}}>Post</Btn>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function Ideas(){
+  const { ideas } = useApp();
+  const [modal,setModal]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const openNew=()=>{ setEditing(null); setModal(true); };
+  const openEdit=(i)=>{ setEditing(i.id); setModal(true); };
+  const editingIdea = editing ? ideas.find(i=>i.id===editing) : null;
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Ideas" sub="Brainstorm together · build it up, then promote to a task"
+        actions={<Btn icon="plus" onClick={openNew}>New Idea</Btn>}/>
+      {ideas.length ? (
+        <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14 }} className="grid-resp">
+          {ideas.map(idea=>(
+            <Card key={idea.id} pad={16} hover onClick={()=>openEdit(idea)} style={{ display:'flex',flexDirection:'column',gap:8 }}>
+              <div style={{ display:'flex',alignItems:'flex-start',gap:8 }}>
+                <span style={{ width:30,height:30,borderRadius:9,background:`${C.gold}1c`,display:'grid',placeItems:'center',flex:'0 0 auto' }}>
+                  <Icon name="bulb" size={17} color={C.gold}/></span>
+                <span style={{ fontSize:14.5,fontWeight:700,lineHeight:1.3 }} className="clamp2">{idea.title}</span>
+              </div>
+              {idea.desc && <p style={{ fontSize:12.5,color:C.textDim }} className="clamp3">{idea.desc}</p>}
+              <div style={{ display:'flex',alignItems:'center',gap:8,marginTop:'auto',paddingTop:6 }}>
+                <Avatar id={idea.by} size={22}/>
+                <span style={{ fontSize:11.5,color:C.textMuted }}>{relTime(idea.created)}</span>
+                <span style={{ marginLeft:'auto',fontSize:11.5,color:C.textDim,display:'inline-flex',alignItems:'center',gap:4 }}>
+                  <Icon name="message" size={13}/>{(idea.comments||[]).length}</span>
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <Card pad={40} style={{ textAlign:'center' }}>
+          <div style={{ width:54,height:54,borderRadius:14,background:`${C.gold}1c`,display:'grid',placeItems:'center',margin:'0 auto 14px' }}>
+            <Icon name="bulb" size={28} color={C.gold}/></div>
+          <div style={{ fontSize:16,fontWeight:700,marginBottom:6 }}>No ideas yet</div>
+          <p style={{ fontSize:13,color:C.textDim,maxWidth:380,margin:'0 auto 16px' }}>Drop any thought here — a marketing angle, a new service, a van-build idea. Comment back and forth, then promote it to a task when you're ready to run with it.</p>
+          <Btn icon="plus" onClick={openNew}>New Idea</Btn>
+        </Card>
+      )}
+      <IdeaModal open={modal} onClose={()=>setModal(false)} initial={editingIdea}/>
     </div>
   );
 }
@@ -1928,7 +2205,7 @@ function Topbar(){
   );
 }
 
-const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, finance:Finance, goals:Goals, team:Team, reports:Reports, notifications:Notifications };
+const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, ideas:Ideas, finance:Finance, goals:Goals, team:Team, reports:Reports, notifications:Notifications };
 
 function Shell(){
   const { page } = useApp();
