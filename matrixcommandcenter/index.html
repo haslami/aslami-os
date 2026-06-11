@@ -543,6 +543,7 @@ function AppProvider({ children }){
     loading, ghlError, lastSync, contactCount, sync,
     revenue2026, setRevenue2026, brief, setBrief,
     picked, chooseCharacter:(id)=>{ setUser(id); setPicked(true); },
+    relock:()=>setPicked(false),
 
     addAppt:(a)=>{ setAppts(p=>[...p,{...a,id:uid()}]); toast('Appointment scheduled'); },
     updateAppt:(id,patch)=>setAppts(p=>p.map(a=>a.id===id?{...a,...patch}:a)),
@@ -2162,7 +2163,7 @@ function NavItem({ item, active, onClick, badge, collapsed }){
 }
 
 function Sidebar(){
-  const { page, setPage, notifs, user, setUser } = useApp();
+  const { page, setPage, notifs, user, setUser, relock } = useApp();
   const unread=notifs.filter(n=>!n.read).length;
   const me=teamById(user);
   return (
@@ -2194,7 +2195,7 @@ function Sidebar(){
             <div style={{ fontSize:13.5,fontWeight:700 }}>{me.name}</div>
             <div style={{ fontSize:11,color:C.textDim }}>{me.role}</div>
           </div>
-          <button onClick={()=>setUser(user==='habib'?'partner':'habib')} title="Switch partner"
+          <button onClick={()=>user==='habib'?setUser('partner'):relock()} title="Switch partner"
             style={{ width:30,height:30,borderRadius:8,background:C.bg3,color:C.textDim,display:'grid',placeItems:'center' }}>
             <Icon name="logout" size={15}/>
           </button>
@@ -2257,15 +2258,45 @@ const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, ideas:Ideas, 
 function CharacterSelect(){
   const { picked, chooseCharacter } = useApp();
   const [hov,setHov]=useState(null);
+  const [locking,setLocking]=useState(null);
+  const [pin,setPin]=useState('');
+  const [err,setErr]=useState(false);
   if(picked) return null;
   const chars=[
     { id:'habib',   title:'Darth Habib',   sub:'Sith Lord of the Detail',     color:C.red,   glow:'rgba(255,90,90,.55)',  tag:'THE DARK SIDE' },
     { id:'partner', title:'Padawan Ryan',  sub:'Apprentice of the Shine',     color:C.green, glow:'rgba(34,211,107,.5)',  tag:'THE LIGHT SIDE' },
   ];
-  return (
+  const pick=(c)=>{ if(c.id==='habib'){ setLocking('habib'); setPin(''); setErr(false); } else chooseCharacter(c.id); };
+  const submit=()=>{ if(pin==='0761') chooseCharacter('habib'); else { setErr(true); setPin(''); } };
+  const wrap=(kids)=>(
     <div className="fade-in" style={{ position:'fixed',inset:0,zIndex:400,
       background:'radial-gradient(circle at 50% 25%, #0c120f, #04060a 72%)',
-      display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:24,overflow:'auto' }}>
+      display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:24,overflow:'auto' }}>{kids}</div>
+  );
+  if(locking==='habib'){
+    return wrap(<>
+      <div style={{ width:300,maxWidth:'100%',padding:'34px 26px',borderRadius:20,textAlign:'center',
+        background:C.bg2,border:`1px solid ${C.red}66`,boxShadow:`0 0 0 1px ${C.red}33, 0 22px 60px rgba(255,90,90,.4)` }}>
+        <div style={{ position:'relative',width:84,height:84,margin:'0 auto 16px' }}>
+          <div style={{ position:'absolute',inset:-6,borderRadius:'50%',background:'radial-gradient(circle, rgba(255,90,90,.55), transparent 70%)',filter:'blur(6px)' }}/>
+          <div style={{ position:'relative' }}><Avatar id="habib" size={84} ring/></div>
+        </div>
+        <div style={{ fontSize:20,fontWeight:800,color:C.text }}>Darth Habib</div>
+        <p style={{ color:C.textDim,fontSize:13,margin:'4px 0 18px' }}>Enter your passcode</p>
+        <input autoFocus type="password" inputMode="numeric" value={pin}
+          onChange={e=>{ setPin(e.target.value); setErr(false); }}
+          onKeyDown={e=>{ if(e.key==='Enter') submit(); }}
+          style={{ width:'100%',textAlign:'center',fontSize:26,letterSpacing:10,padding:'12px 0',borderRadius:12,
+            background:C.bg,border:`1px solid ${err?C.red:C.border}`,color:C.text,outline:'none',marginBottom:err?8:18 }}/>
+        {err && <p style={{ color:C.red,fontSize:12.5,fontWeight:600,margin:'0 0 14px' }}>Wrong passcode. Try again.</p>}
+        <button onClick={submit} style={{ width:'100%',padding:'12px 0',borderRadius:12,fontSize:15,fontWeight:700,cursor:'pointer',
+          background:C.red,border:'none',color:'#fff',boxShadow:'0 0 18px rgba(255,90,90,.4)' }}>Unlock</button>
+        <button onClick={()=>setLocking(null)} style={{ width:'100%',marginTop:10,padding:'10px 0',borderRadius:12,fontSize:13,cursor:'pointer',
+          background:'transparent',border:`1px solid ${C.border}`,color:C.textDim }}>Back</button>
+      </div>
+    </>);
+  }
+  return wrap(<>
       <div style={{ textAlign:'center',marginBottom:34 }}>
         <div style={{ fontSize:12,letterSpacing:4,color:C.textMuted,fontWeight:700 }}>MATRIX COMMAND CENTER</div>
         <h1 style={{ fontSize:'clamp(26px,5vw,44px)',fontWeight:800,margin:'10px 0 4px',letterSpacing:-.5,
@@ -2275,7 +2306,7 @@ function CharacterSelect(){
       <div style={{ display:'flex',gap:24,flexWrap:'wrap',justifyContent:'center' }}>
         {chars.map(c=>{ const on=hov===c.id;
           return (
-          <button key={c.id} onClick={()=>chooseCharacter(c.id)}
+          <button key={c.id} onClick={()=>pick(c)}
             onMouseEnter={()=>setHov(c.id)} onMouseLeave={()=>setHov(null)}
             style={{ width:262,padding:'30px 24px',borderRadius:20,cursor:'pointer',textAlign:'center',
               background:C.bg2,border:`1px solid ${c.color}${on?'aa':'55'}`,
@@ -2291,12 +2322,12 @@ function CharacterSelect(){
               boxShadow:`0 0 16px ${c.color}, 0 0 4px #fff` }}/>
             <div style={{ fontSize:22,fontWeight:800,color:C.text }}>{c.title}</div>
             <div style={{ fontSize:12.5,color:C.textDim,marginTop:4 }}>{c.sub}</div>
+            {c.id==='habib' && <div style={{ fontSize:11,color:C.textMuted,marginTop:8 }}>🔒 Passcode required</div>}
           </button>
         ); })}
       </div>
       <p style={{ marginTop:30,fontSize:12,color:C.textMuted }}>You can switch anytime from the top bar.</p>
-    </div>
-  );
+  </>);
 }
 
 function Brief(){
