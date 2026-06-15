@@ -242,6 +242,59 @@ const NOW = new Date();
 const TODAY = localISO(NOW);
 
 /* ============================================================
+   RECURRING TASKS — series rules + occurrence math
+   ============================================================ */
+const RECUR_BACKFILL_DAYS = 7;   /* on reopen, surface missed occurrences within this window */
+const WEEKDAYS = [
+  { i:0, short:'S', label:'Sun' }, { i:1, short:'M', label:'Mon' }, { i:2, short:'T', label:'Tue' },
+  { i:3, short:'W', label:'Wed' }, { i:4, short:'T', label:'Thu' }, { i:5, short:'F', label:'Fri' },
+  { i:6, short:'S', label:'Sat' },
+];
+const REPEAT_OPTS = [
+  { id:'none',     label:"Doesn't repeat" },
+  { id:'daily',    label:'Daily' },
+  { id:'weekly',   label:'Weekly' },
+  { id:'biweekly', label:'Bi-weekly' },
+  { id:'monthly',  label:'Monthly' },
+];
+const dowOf = isoStr => new Date(isoStr+'T00:00:00').getDay();
+const domOf = isoStr => new Date(isoStr+'T00:00:00').getDate();
+const daysInMonth = isoStr => { const d=new Date(isoStr+'T00:00:00'); return new Date(d.getFullYear(), d.getMonth()+1, 0).getDate(); };
+/* whole weeks between two dates (by their week-start), for bi-weekly parity */
+const weeksBetween = (aISO, bISO) => Math.round((startOfWeek(new Date(bISO+'T00:00:00')) - startOfWeek(new Date(aISO+'T00:00:00')))/604800000);
+
+/* Does a recurrence rule fire on a given date? */
+function isOccurrence(rule, dateISO){
+  if(!rule) return false;
+  if(rule.anchor && dateISO < rule.anchor) return false;
+  if(rule.until && dateISO > rule.until) return false;
+  if(rule.freq==='daily') return true;
+  if(rule.freq==='weekly')   return (rule.days||[]).includes(dowOf(dateISO));
+  if(rule.freq==='biweekly') return (rule.days||[]).includes(dowOf(dateISO)) && (weeksBetween(rule.anchor||dateISO, dateISO) % 2 === 0);
+  if(rule.freq==='monthly'){ const dom=Math.min(rule.dom||domOf(rule.anchor||dateISO), daysInMonth(dateISO)); return domOf(dateISO)===dom; }
+  return false;
+}
+/* Next date on/after fromISO that the rule fires (or null within ~13 months). */
+function nextOccurrence(rule, fromISO){
+  let d=fromISO;
+  for(let i=0;i<400;i++){ if(rule.until && d>rule.until) return null; if(isOccurrence(rule,d)) return d; d=addDays(d,1); }
+  return null;
+}
+/* Human schedule summary, e.g. "Weekly on Mon, Wed · until Aug 1". */
+function scheduleLabel(rule){
+  if(!rule) return '';
+  const dl = (rule.days||[]).slice().sort((a,b)=>a-b).map(i=>WEEKDAYS[i].label).join(', ');
+  let s;
+  if(rule.freq==='daily') s='Every day';
+  else if(rule.freq==='weekly')   s='Weekly on '+(dl||'—');
+  else if(rule.freq==='biweekly') s='Every 2 weeks on '+(dl||'—');
+  else if(rule.freq==='monthly'){ const dom=rule.dom||domOf(rule.anchor||TODAY); const sfx=(dom%10===1&&dom!==11)?'st':(dom%10===2&&dom!==12)?'nd':(dom%10===3&&dom!==13)?'rd':'th'; s='Monthly on the '+dom+sfx; }
+  else s='';
+  if(rule.until) s+=' · until '+fmtDate(rule.until);
+  return s;
+}
+
+/* ============================================================
    GOHIGHLEVEL  — live data layer (no seed / no mock numbers)
    ============================================================ */
 const GHL_LOC='4oujU1ql0szJ60pb1xzk';
@@ -444,6 +497,33 @@ function AppProvider({ children }){
     tasks:s.tasks, ideas:s.ideas, goals:s.goals, revenue2026:s.revenue2026, messages:s.messages, announce:s.announce,
   });
 
+  /* Materialize recurring series into board instances. Pure & idempotent: for each
+     live template (not a pending request), add the missing occurrences within the
+     last RECUR_BACKFILL_DAYS up to today. Instance ids are deterministic
+     (`${seriesId}:${date}`) so two devices generating the same day collapse to one
+     under last-write-wins. No-op when nothing is missing (avoids push churn). */
+  const materializeRecurring = useCallback(()=>{
+    setTasks(prev=>{
+      const ids = new Set(prev.map(t=>t.id));
+      const adds=[];
+      const winStart = addDays(TODAY, -RECUR_BACKFILL_DAYS);
+      prev.forEach(t=>{
+        if(!t.template || !t.recurrence) return;
+        if(t.request) return;   /* recurring request (pending or declined): not a live series until accepted */
+        const start = (t.recurrence.anchor && t.recurrence.anchor>winStart) ? t.recurrence.anchor : winStart;
+        for(let d=start; d<=TODAY; d=addDays(d,1)){
+          if(!isOccurrence(t.recurrence,d)) continue;
+          const iid=t.id+':'+d;
+          if(ids.has(iid)) continue;
+          ids.add(iid);
+          adds.push({ id:iid, seriesId:t.id, title:t.title, desc:t.desc||'', priority:t.priority||'medium',
+            assignedTo:t.assignedTo, due:d, status:'not-started', created:Date.now(), comments:[] });
+        }
+      });
+      return adds.length ? [...prev, ...adds] : prev;
+    });
+  },[]);
+
   const applyRemote = useCallback((row)=>{
     if(!row || !row.data) return;
     const stamp = row.updated_at ? new Date(row.updated_at).getTime() : 0;
@@ -459,7 +539,8 @@ function AppProvider({ children }){
     if(typeof d.revenue2026 !== 'undefined'){ setRevenue2026(d.revenue2026); merged.revenue2026 = d.revenue2026; }
     /* baseline = the state we just applied, so the push effect sees no diff and skips */
     lastSyncedRef.current = serializeSync(merged);
-  },[]);
+    materializeRecurring();   /* surface any due instances from synced templates */
+  },[materializeRecurring]);
 
   const pullRemote = useCallback(async ()=>{
     if(!supa) return;
@@ -480,11 +561,11 @@ function AppProvider({ children }){
         { event:'*', schema:'public', table:SUPA_TABLE, filter:'id=eq.'+SUPA_ROW },
         (payload)=>{ if(payload.new) applyRemote(payload.new); })
       .subscribe();
-    const onFocus=()=>pullRemote();
+    const onFocus=()=>{ pullRemote(); materializeRecurring(); };   /* catch midnight rollover on return */
     window.addEventListener('focus', onFocus);
     const iv = setInterval(pullRemote, 20000);
     return ()=>{ supa.removeChannel(channel); window.removeEventListener('focus', onFocus); clearInterval(iv); };
-  },[pullRemote]);
+  },[pullRemote, materializeRecurring]);
 
   /* debounced push whenever synced state changes locally */
   useEffect(()=>{
@@ -541,15 +622,15 @@ function AppProvider({ children }){
     const isNew  = id => prev && !(id in prev);
     const justDone = t => prev && t.status==='completed' && prev[t.id] && prev[t.id]!=='completed';
 
-    const active = ts.filter(t=>!(t.request && t.request.status==='pending'));
+    const active = ts.filter(t=>!t.template && !(t.request && t.request.status==='pending'));
     const due = active.filter(t=>t.due===TODAY && t.status!=='completed');
     const dueBy = {
       habib:   due.filter(t=>t.assignedTo==='habib'),
       partner: due.filter(t=>t.assignedTo==='partner'),
       both:    due.filter(t=>t.assignedTo==='both'),
     };
-    const added     = prev ? ts.filter(t=>!t.request && isNew(t.id)) : [];
-    const completed = prev ? ts.filter(t=>justDone(t)) : [];
+    const added     = prev ? ts.filter(t=>!t.request && !t.template && isNew(t.id)) : [];
+    const completed = prev ? ts.filter(t=>!t.template && justDone(t)) : [];
     const requests  = prev ? ts.filter(t=>t.request && isNew(t.id)) : [];
     const detailsToday = aps.filter(a=>a.date===TODAY && a.status!=='cancelled')
                             .sort((a,b)=>(a.time||'').localeCompare(b.time||''));
@@ -566,6 +647,13 @@ function AppProvider({ children }){
     const t=setTimeout(()=>setBrief(buildBrief()), 700);   /* let the initial Supabase pull land */
     return ()=>clearTimeout(t);
   },[loading, picked, buildBrief]);
+
+  /* generate today's recurring instances once the initial pull has landed */
+  useEffect(()=>{
+    if(loading || !picked) return;
+    const t=setTimeout(materializeRecurring, 900);
+    return ()=>clearTimeout(t);
+  },[loading, picked, materializeRecurring]);
 
   const api = {
     page, setPage, user, setUser, toast, toasts, setToasts,
@@ -584,11 +672,20 @@ function AppProvider({ children }){
     delTask:(id)=>{ setTasks(p=>p.filter(t=>t.id!==id)); toast('Task deleted','info'); },
     addComment:(id,text)=>setTasks(p=>p.map(t=>t.id===id?{...t,comments:[...t.comments,{by:user,text,ts:Date.now()}]}:t)),
 
-    /* Task requests: send a task to the other partner to accept/decline */
+    /* Recurring series: a hidden template (self/Both only) that auto-spawns board instances */
+    materializeRecurring,
+    addSeries:(t)=>{ setTasks(p=>[...p,{...t,id:uid(),template:true,created:Date.now(),comments:[]}]);
+      materializeRecurring(); toast('Recurring task created'); },
+    delSeries:(id)=>{ setTasks(p=>p.filter(t=>t.id!==id)); toast('Recurring task stopped','info'); },
+
+    /* Task requests: send a task to the other partner to accept/decline.
+       A recurrence makes it a recurring request — on accept it becomes their series. */
     sendRequest:(t)=>{ const to=user==='habib'?'partner':'habib';
-      setTasks(p=>[...p,{...t,id:uid(),created:Date.now(),comments:[],assignedTo:to,status:'not-started',request:{status:'pending',from:user,to}}]);
-      toast('Request sent to '+teamById(to).name); },
-    acceptRequest:(id)=>{ setTasks(p=>p.map(t=>t.id===id?{...t,request:null}:t)); toast('Request accepted'); },
+      const series = t.recurrence ? { template:true } : {};
+      setTasks(p=>[...p,{...t,...series,id:uid(),created:Date.now(),comments:[],assignedTo:to,status:'not-started',request:{status:'pending',from:user,to}}]);
+      toast((t.recurrence?'Recurring request':'Request')+' sent to '+teamById(to).name); },
+    acceptRequest:(id)=>{ setTasks(p=>p.map(t=>t.id===id?{...t,request:null}:t));
+      materializeRecurring(); toast('Request accepted'); },
     declineRequest:(id)=>setTasks(p=>p.map(t=>t.id===id?{...t,request:{...t.request,status:'declined'}}:t)),
     resendRequest:(id)=>setTasks(p=>p.map(t=>t.id===id?{...t,request:{...t.request,status:'pending'}}:t)),
     dismissRequest:(id)=>setTasks(p=>p.filter(t=>t.id!==id)),
@@ -670,6 +767,7 @@ const ICONS = {
   trophy:<><path d="M7 4h10v4a5 5 0 0 1-10 0V4Z"/><path d="M7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3M9 20h6M10 16h4v4h-4z"/></>,
   menu:<><path d="M4 6h16M4 12h16M4 18h16"/></>,
   move:<><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3M3 12h18M12 3v18"/></>,
+  repeat:<><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></>,
 };
 function Icon({ name, size=18, color='currentColor', stroke=1.8, style }){
   return (
@@ -919,7 +1017,7 @@ function Dashboard(){
   const live = appts.filter(a=>a.status!=='cancelled');
   const todayAppts = live.filter(a=>a.date===TODAY).sort((a,b)=>a.time.localeCompare(b.time));
   const mStart = localISO(new Date(NOW.getFullYear(),NOW.getMonth(),1));
-  const dueTasks = tasks.filter(t=>t.due===TODAY && t.status!=='completed');
+  const dueTasks = tasks.filter(t=>!t.template && !(t.request && t.request.status==='pending') && t.due===TODAY && t.status!=='completed');
   const unread = notifs.filter(n=>!n.read).length;
   const openLeads = leads.filter(l=>l.stage!=='won'&&l.stage!=='lost').length;
   const leadsThisMonth = leads.filter(l=>l.ts>=new Date(NOW.getFullYear(),NOW.getMonth(),1).getTime()).length;
@@ -1276,26 +1374,54 @@ function DayView({ cursor, appts, onAppt, onSlot }){
 /* ============================================================
    TASKS
    ============================================================ */
-function TaskModal({ open, onClose, initial, asRequest }){
-  const { addTask, updateTask, delTask, addComment, sendRequest, user } = useApp();
+function TaskModal({ open, onClose, initial, asRequest, asSeries }){
+  const { addTask, updateTask, delTask, addComment, sendRequest, addSeries, delSeries, user } = useApp();
   const other = teamById(user==='habib'?'partner':'habib');
   const blank={ title:'',desc:'',priority:'medium',due:TODAY,assignedTo:user,status:'not-started' };
   const [f,setF]=useState(initial||blank);
   const [cm,setCm]=useState('');
-  useEffect(()=>{ setF(initial||blank); setCm(''); },[initial,open]);
+  const [repeat,setRepeat]=useState('none');
+  const [days,setDays]=useState([]);
+  const [dom,setDom]=useState(domOf(TODAY));
+  const [until,setUntil]=useState('');
+  useEffect(()=>{ setF(initial||blank); setCm('');
+    const r = initial && initial.recurrence;
+    setRepeat(asSeries && !r ? 'daily' : (r ? r.freq : 'none'));
+    setDays(r && r.days ? r.days : [dowOf(initial?(initial.due||TODAY):TODAY)]);
+    setDom(r && r.dom ? r.dom : domOf(initial?(initial.due||TODAY):TODAY));
+    setUntil(r && r.until ? r.until : '');
+  },[initial,open,asSeries]);
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const toggleDay=(i)=>setDays(d=>d.includes(i)?d.filter(x=>x!==i):[...d,i].sort((a,b)=>a-b));
   /* You can only assign to yourself or Both — to hand a task to your partner, send a request. */
   const assignOpts=[teamById(user),BOTH];
   if(f.assignedTo && !assignOpts.some(o=>o.id===f.assignedTo)) assignOpts.unshift(teamById(f.assignedTo));
+
+  const isTemplate = asSeries || !!(initial && initial.template);
+  const showRepeat = asSeries || asRequest || !initial || isTemplate;   /* not when editing a plain task/instance */
+  const showStatus = !asRequest && !isTemplate;
+  const showDue    = !isTemplate && repeat==='none';
+  const buildRule=()=>{
+    if(repeat==='none') return null;
+    const rule={ freq:repeat, anchor:(initial && initial.recurrence && initial.recurrence.anchor) || TODAY };
+    if(repeat==='weekly'||repeat==='biweekly') rule.days = days.length?days:[dowOf(TODAY)];
+    if(repeat==='monthly') rule.dom = dom;
+    if(until) rule.until = until;
+    return rule;
+  };
   const save=()=>{ if(!f.title)return;
-    if(asRequest){ sendRequest({ title:f.title,desc:f.desc,priority:f.priority,due:f.due }); }
+    const rule = showRepeat ? buildRule() : ((initial && initial.recurrence)||null);
+    if(asRequest){ sendRequest({ title:f.title,desc:f.desc,priority:f.priority,due:f.due, ...(rule?{recurrence:rule}:{}) }); }
+    else if(initial && initial.template){ updateTask(initial.id,{ title:f.title,desc:f.desc,priority:f.priority,assignedTo:f.assignedTo,recurrence:rule }); }
     else if(initial){ updateTask(initial.id,f); }
+    else if(rule){ addSeries({ title:f.title,desc:f.desc,priority:f.priority,assignedTo:f.assignedTo,recurrence:rule }); }
     else { addTask(f); }
     onClose(); };
+  const title = asRequest?'Send Task Request' : isTemplate?(initial?'Edit Recurring Task':'New Recurring Task') : initial?'Task Details':'New Task';
   return (
-    <Modal open={open} onClose={onClose} title={asRequest?'Send Task Request':initial?'Task Details':'New Task'} width={560}
+    <Modal open={open} onClose={onClose} title={title} width={560}
       footer={<>
-        {initial && !asRequest && <Btn variant="danger" icon="trash" onClick={()=>{delTask(initial.id);onClose();}} style={{ marginRight:'auto' }}>Delete</Btn>}
+        {initial && !asRequest && <Btn variant="danger" icon="trash" onClick={()=>{(initial.template?delSeries:delTask)(initial.id);onClose();}} style={{ marginRight:'auto' }}>{initial.template?'Stop':'Delete'}</Btn>}
         <Btn variant="dark" onClick={onClose}>Cancel</Btn>
         <Btn icon={asRequest?'send':undefined} onClick={save}>{asRequest?('Send to '+other.name):initial?'Save':'Create'}</Btn>
       </>}>
@@ -1308,6 +1434,12 @@ function TaskModal({ open, onClose, initial, asRequest }){
             <span style={{ color:C.textDim }}> to take this on — they can accept or decline.</span></div>
         </div>
       )}
+      {initial && initial.seriesId && (
+        <div style={{ display:'flex',alignItems:'center',gap:8,background:C.cyanDim,border:`1px solid ${C.cyan}40`,
+          borderRadius:10,padding:'9px 12px',marginBottom:14,fontSize:12.5,color:C.cyanBright }}>
+          <Icon name="repeat" size={15} color={C.cyan}/> Part of a recurring series — edits here apply to this one only.
+        </div>
+      )}
       <Field label="Title"><input value={f.title} onChange={e=>set('title',e.target.value)} placeholder="What needs doing?"/></Field>
       <Field label="Description"><textarea rows={2} value={f.desc} onChange={e=>set('desc',e.target.value)} placeholder="Details..."/></Field>
       <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
@@ -1316,7 +1448,7 @@ function TaskModal({ open, onClose, initial, asRequest }){
             {Object.entries(PRIORITY).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
           </select>
         </Field>
-        {!asRequest && (
+        {showStatus && (
         <Field label="Status">
           <select value={f.status} onChange={e=>set('status',e.target.value)}>
             {TASK_COLS.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
@@ -1324,18 +1456,48 @@ function TaskModal({ open, onClose, initial, asRequest }){
         </Field>
         )}
       </div>
-      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
-        <Field label="Due Date"><input type="date" value={f.due} onChange={e=>set('due',e.target.value)}/></Field>
+      <div style={{ display:'grid',gridTemplateColumns:showDue?'1fr 1fr':'1fr',gap:12 }}>
+        {showDue && <Field label="Due Date"><input type="date" value={f.due} onChange={e=>set('due',e.target.value)}/></Field>}
         {!asRequest && (
         <Field label="Assigned To">
           <select value={f.assignedTo} onChange={e=>set('assignedTo',e.target.value)}>
             {assignOpts.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
-          <p style={{ fontSize:11,color:C.textMuted,marginTop:5 }}>To give it to {other.name}, send a task request instead.</p>
+          <p style={{ fontSize:11,color:C.textMuted,marginTop:5 }}>To give it to {other.name}, {asSeries||isTemplate?'send a recurring request instead.':'send a task request instead.'}</p>
         </Field>
         )}
       </div>
-      {initial && (
+      {showRepeat && (
+        <Field label="Repeat">
+          <select value={repeat} onChange={e=>setRepeat(e.target.value)}>
+            {REPEAT_OPTS.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+          {(repeat==='weekly'||repeat==='biweekly') && (
+            <div style={{ display:'flex',gap:6,marginTop:10,flexWrap:'wrap' }}>
+              {WEEKDAYS.map(d=>{ const on=days.includes(d.i);
+                return <button key={d.i} type="button" onClick={()=>toggleDay(d.i)} title={d.label}
+                  style={{ width:38,height:38,borderRadius:9,fontSize:13,fontWeight:700,
+                    background:on?C.cyanDim:C.bg2,color:on?C.cyan:C.textDim,border:`1px solid ${on?C.cyan+'66':C.border}` }}>{d.short}</button>; })}
+            </div>
+          )}
+          {repeat==='monthly' && (
+            <div style={{ display:'flex',alignItems:'center',gap:8,marginTop:10 }}>
+              <span style={{ fontSize:12.5,color:C.textDim }}>On day</span>
+              <input type="number" min={1} max={31} value={dom} onChange={e=>setDom(Math.max(1,Math.min(31,+e.target.value||1)))} style={{ width:80 }}/>
+              <span style={{ fontSize:12,color:C.textMuted }}>of each month</span>
+            </div>
+          )}
+          {repeat!=='none' && (
+            <div style={{ display:'flex',alignItems:'center',gap:8,marginTop:10 }}>
+              <span style={{ fontSize:12.5,color:C.textDim,minWidth:70 }}>Ends</span>
+              <input type="date" value={until} onChange={e=>setUntil(e.target.value)} style={{ flex:1 }}/>
+              {until && <button type="button" onClick={()=>setUntil('')} style={{ fontSize:12,color:C.textMuted,background:'none' }}>clear</button>}
+            </div>
+          )}
+          {repeat!=='none' && <p style={{ fontSize:11.5,color:C.cyanBright,marginTop:8 }}>{scheduleLabel(buildRule())}</p>}
+        </Field>
+      )}
+      {initial && !initial.template && (
         <div style={{ marginTop:8 }}>
           <label>Comments</label>
           <div style={{ display:'flex',flexDirection:'column',gap:8,marginBottom:10 }}>
@@ -1398,7 +1560,10 @@ function TaskCard({ task, onClick, onDragStart, onDragEnd, dragging }){
           {high && <Icon name="flag" size={13} color={C.red} style={{ marginTop:2,flex:'0 0 auto' }}/>}
           {task.title}
         </span>
-        <Badge color={high?C.red:p.color} solid={high}>{high&&'⚡ '}{p.label}</Badge>
+        <div style={{ display:'flex',alignItems:'center',gap:6,flex:'0 0 auto' }}>
+          {task.seriesId && <Icon name="repeat" size={13} color={C.cyan} style={{ flex:'0 0 auto' }}/>}
+          <Badge color={high?C.red:p.color} solid={high}>{high&&'⚡ '}{p.label}</Badge>
+        </div>
       </div>
       {task.desc && <p style={{ fontSize:12,color:C.textDim,marginBottom:9 }} className="clamp2">{task.desc}</p>}
       <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}>
@@ -1437,8 +1602,12 @@ function RequestCard({ task, direction }){
       borderLeft:`3px solid ${declined?C.red:p.color}` }}>
       <div style={{ display:'flex',justifyContent:'space-between',gap:8,marginBottom:6 }}>
         <span style={{ fontSize:14,fontWeight:700 }}>{task.title}</span>
-        <Badge color={p.color}>{p.label}</Badge>
+        <div style={{ display:'flex',alignItems:'center',gap:6,flex:'0 0 auto' }}>
+          {task.recurrence && <Icon name="repeat" size={13} color={C.cyan}/>}
+          <Badge color={p.color}>{p.label}</Badge>
+        </div>
       </div>
+      {task.recurrence && <p style={{ fontSize:11.5,color:C.cyanBright,marginBottom:8,display:'inline-flex',alignItems:'center',gap:5 }}><Icon name="repeat" size={12} color={C.cyan}/>{scheduleLabel(task.recurrence)}</p>}
       {task.desc && <p style={{ fontSize:12.5,color:C.textDim,marginBottom:10 }}>{task.desc}</p>}
       <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:direction==='incoming'||declined?12:0 }}>
         <DueChip due={task.due} status={task.status}/>
@@ -1477,6 +1646,7 @@ function Tasks(){
   const [sortKey,setSortKey]=useState('priority');
   const [modal,setModal]=useState(false);
   const [reqModal,setReqModal]=useState(false);
+  const [seriesModal,setSeriesModal]=useState(false);
   const [editing,setEditing]=useState(null);
   const [drag,setDrag]=useState(null);
   const [over,setOver]=useState(null);
@@ -1484,16 +1654,24 @@ function Tasks(){
   const [collapsedCols,setCollapsedCols]=useState({ completed:true });
   const toggleCol=(id)=>setCollapsedCols(c=>({ ...c, [id]:!c[id] }));
 
-  /* board = real tasks (pending/declined requests live in the Requests tab) */
+  /* board = real tasks (templates + pending/declined requests live in their own tabs) */
   const boardTasks=sortTasks(
-    tasks.filter(t=>!t.request && (filterWho==='all'||t.assignedTo===filterWho)),
+    tasks.filter(t=>!t.request && !t.template && (filterWho==='all'||t.assignedTo===filterWho)),
     sortKey);
   const reqs=tasks.filter(t=>t.request);
   const incoming=reqs.filter(t=>t.request.status==='pending' && t.request.to===user);
   const outgoing=reqs.filter(t=>t.request.from===user && (t.request.status==='pending'||t.request.status==='declined'));
+  /* live recurring series = accepted/own templates (a template still carrying a
+     request — pending or declined — lives in the Requests tab, not here) */
+  const series=tasks.filter(t=>t.template && t.recurrence && !t.request);
 
   const openNew=()=>{ setEditing(null); setModal(true); };
   const openEdit=(t)=>{ setEditing(t); setModal(true); };
+  const headAction = tab==='board'
+    ? <Btn icon="plus" onClick={openNew}>New Task</Btn>
+    : tab==='requests'
+      ? <Btn icon="send" onClick={()=>setReqModal(true)}>New Request</Btn>
+      : <Btn icon="repeat" onClick={()=>setSeriesModal(true)}>New Recurring</Btn>;
 
   const onDragStart=(e,id)=>{ setDrag(id); e.dataTransfer.effectAllowed='move'; };
   const onDrop=(status)=>{ if(drag){ updateTask(drag,{status}); } setDrag(null); setOver(null); };
@@ -1501,24 +1679,26 @@ function Tasks(){
   return (
     <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1,display:'flex',flexDirection:'column' }}>
       <PageHead title="Tasks" sub={isMobile?"Shared board · tap a card to edit · change its status to move it":"Shared board · drag cards between columns"}
-        actions={tab==='board'
-          ? <Btn icon="plus" onClick={openNew}>New Task</Btn>
-          : <Btn icon="send" onClick={()=>setReqModal(true)}>New Request</Btn>}/>
+        actions={headAction}/>
 
       <div style={{ display:'flex',gap:6,marginBottom:16,borderBottom:`1px solid ${C.border}` }}>
-        {[{id:'board',label:'Board',icon:'check'},{id:'requests',label:'Requests',icon:'inbox'}].map(t=>(
+        {[{id:'board',label:'Board',icon:'check'},{id:'requests',label:'Requests',icon:'inbox'},{id:'recurring',label:'Recurring',icon:'repeat'}].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} style={{ display:'inline-flex',alignItems:'center',gap:7,
             padding:'9px 16px',fontSize:13.5,fontWeight:700,background:'none',position:'relative',
             color:tab===t.id?C.cyan:C.textDim,borderBottom:`2px solid ${tab===t.id?C.cyan:'transparent'}`,marginBottom:-1 }}>
             <Icon name={t.icon} size={16} color={tab===t.id?C.cyan:'currentColor'}/>{t.label}
             {t.id==='requests' && incoming.length>0 &&
               <span style={{ fontSize:10.5,fontWeight:800,color:'#06090c',background:C.gold,borderRadius:20,padding:'1px 6px',minWidth:17,textAlign:'center' }}>{incoming.length}</span>}
+            {t.id==='recurring' && series.length>0 &&
+              <span style={{ fontSize:10.5,fontWeight:800,color:C.cyan,background:C.cyanDim,borderRadius:20,padding:'1px 6px',minWidth:17,textAlign:'center' }}>{series.length}</span>}
           </button>
         ))}
       </div>
 
       {tab==='requests' ? (
         <RequestsView incoming={incoming} outgoing={outgoing}/>
+      ) : tab==='recurring' ? (
+        <RecurringView series={series} onEdit={openEdit} onNew={()=>setSeriesModal(true)}/>
       ) : (<>
       <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:12 }}>
         <div style={{ display:'flex',gap:8,alignItems:'center',flexWrap:'wrap' }}>
@@ -1611,6 +1791,43 @@ function Tasks(){
 
       <TaskModal open={modal} onClose={()=>setModal(false)} initial={editing}/>
       <TaskModal open={reqModal} onClose={()=>setReqModal(false)} asRequest/>
+      <TaskModal open={seriesModal} onClose={()=>setSeriesModal(false)} asSeries/>
+    </div>
+  );
+}
+
+function RecurringView({ series, onEdit, onNew }){
+  if(!series.length) return (
+    <div style={{ textAlign:'center',padding:'48px 20px',border:`1px dashed ${C.border}`,borderRadius:16 }}>
+      <Icon name="repeat" size={30} color={C.textMuted}/>
+      <div style={{ fontSize:15,fontWeight:700,marginTop:12 }}>No recurring tasks yet</div>
+      <p style={{ fontSize:13,color:C.textDim,maxWidth:380,margin:'8px auto 16px' }}>
+        Set up a task that auto-appears on the board on schedule — daily cold calls, weekly SMS blasts, monthly reports. A fresh card shows up each time it's due.</p>
+      <Btn icon="repeat" onClick={onNew}>New Recurring Task</Btn>
+    </div>
+  );
+  return (
+    <div style={{ display:'flex',flexDirection:'column',gap:10 }}>
+      {series.map(s=>{ const m=teamById(s.assignedTo); const next=nextOccurrence(s.recurrence, TODAY); const p=PRIORITY[s.priority];
+        return (
+          <div key={s.id} onClick={()=>onEdit(s)} style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 16px',
+            background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,cursor:'pointer',borderLeft:`3px solid ${C.cyan}` }}
+            onMouseEnter={e=>e.currentTarget.style.borderColor=C.borderHi}
+            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+            <div style={{ width:38,height:38,borderRadius:10,flex:'0 0 auto',background:C.cyanDim,display:'grid',placeItems:'center' }}>
+              <Icon name="repeat" size={18} color={C.cyan}/>
+            </div>
+            <div style={{ flex:1,minWidth:0 }}>
+              <div style={{ fontSize:14.5,fontWeight:700 }} className="clamp1">{s.title}</div>
+              <div style={{ fontSize:12.5,color:C.cyanBright }}>{scheduleLabel(s.recurrence)}</div>
+            </div>
+            <div style={{ textAlign:'right',display:'flex',flexDirection:'column',gap:3,alignItems:'flex-end' }}>
+              <Badge color={p.color}>{p.label}</Badge>
+              <span style={{ fontSize:11.5,color:C.textDim }}>{next?('Next: '+fmtDate(next)):'No more occurrences'}</span>
+            </div>
+            <Avatar id={s.assignedTo} size={30}/>
+          </div>
+        ); })}
     </div>
   );
 }
