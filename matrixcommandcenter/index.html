@@ -294,6 +294,24 @@ function scheduleLabel(rule){
   return s;
 }
 
+/* All task occurrences on a date for the calendar: recurring series projected
+   from their rule (no board materialization needed) plus one-off tasks due that
+   day. `done` reflects a completed instance/task for that date. */
+function taskOccurrences(tasks, ds){
+  const out=[];
+  tasks.forEach(t=>{
+    if(t.template && t.recurrence && !t.request){
+      if(isOccurrence(t.recurrence, ds)){
+        const inst=tasks.find(x=>x.id===t.id+':'+ds);
+        out.push({ key:t.id+':'+ds, title:t.title, priority:t.priority, assignedTo:t.assignedTo, recurring:true, done:inst?inst.status==='completed':false });
+      }
+    } else if(!t.template && !t.request && !t.seriesId && t.due===ds){
+      out.push({ key:t.id, title:t.title, priority:t.priority, assignedTo:t.assignedTo, recurring:false, done:t.status==='completed' });
+    }
+  });
+  return out;
+}
+
 /* ============================================================
    GOHIGHLEVEL  — live data layer (no seed / no mock numbers)
    ============================================================ */
@@ -669,6 +687,23 @@ function AppProvider({ children }){
 
     addTask:(t)=>{ setTasks(p=>[...p,{...t,id:uid(),created:Date.now(),comments:[]}]); toast('Task created'); },
     updateTask:(id,patch)=>setTasks(p=>p.map(t=>t.id===id?{...t,...patch}:t)),
+    /* Check off / reopen. Completing a recurring instance also spawns its next occurrence. */
+    toggleDone:(id)=>{ const cur=tasks.find(x=>x.id===id); const completing=cur&&cur.status!=='completed';
+      setTasks(prev=>{
+        const t=prev.find(x=>x.id===id); if(!t) return prev;
+        const done=t.status==='completed';
+        let next=prev.map(x=>x.id===id?{...x,status:done?'not-started':'completed'}:x);
+        if(!done && t.seriesId){
+          const tmpl=prev.find(x=>x.id===t.seriesId && x.template && x.recurrence && !x.request);
+          if(tmpl){ const nd=nextOccurrence(tmpl.recurrence, addDays(t.due,1));
+            const iid=tmpl.id+':'+nd;
+            if(nd && !prev.some(x=>x.id===iid)) next=[...next,{ id:iid,seriesId:tmpl.id,title:tmpl.title,desc:tmpl.desc||'',
+              priority:tmpl.priority||'medium',assignedTo:tmpl.assignedTo,due:nd,status:'not-started',created:Date.now(),comments:[] }]; }
+        }
+        return next;
+      });
+      if(completing) toast(cur.seriesId?'Done ✓ next one added':'Task completed');
+    },
     delTask:(id)=>{ setTasks(p=>p.filter(t=>t.id!==id)); toast('Task deleted','info'); },
     addComment:(id,text)=>setTasks(p=>p.map(t=>t.id===id?{...t,comments:[...t.comments,{by:user,text,ts:Date.now()}]}:t)),
 
@@ -768,6 +803,7 @@ const ICONS = {
   menu:<><path d="M4 6h16M4 12h16M4 18h16"/></>,
   move:<><path d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3M3 12h18M12 3v18"/></>,
   repeat:<><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></>,
+  check2:<><path d="M5 12l4 4 10-11"/></>,
 };
 function Icon({ name, size=18, color='currentColor', stroke=1.8, style }){
   return (
@@ -1201,7 +1237,7 @@ function ApptModal({ open, onClose, initial, dateHint }){
 }
 
 function Schedule(){
-  const { appts } = useApp();
+  const { appts, tasks } = useApp();
   const [view,setView]=useState('month');
   const [cursor,setCursor]=useState(new Date('2026-06-01T00:00:00'));
   const [modal,setModal]=useState(false);
@@ -1236,12 +1272,15 @@ function Schedule(){
         </div>
       </div>
 
-      {view==='month' && <MonthView cursor={cursor} appts={appts} onDay={openNew} onAppt={openEdit}/>}
-      {view==='week' && <WeekView cursor={cursor} appts={appts} onAppt={openEdit} onSlot={openNew}/>}
-      {view==='day' && <DayView cursor={cursor} appts={appts} onAppt={openEdit} onSlot={openNew}/>}
+      {view==='month' && <MonthView cursor={cursor} appts={appts} tasks={tasks} onDay={openNew} onAppt={openEdit}/>}
+      {view==='week' && <WeekView cursor={cursor} appts={appts} tasks={tasks} onAppt={openEdit} onSlot={openNew}/>}
+      {view==='day' && <DayView cursor={cursor} appts={appts} tasks={tasks} onAppt={openEdit} onSlot={openNew}/>}
 
-      {/* Service legend */}
+      {/* Legend */}
       <div style={{ display:'flex',flexWrap:'wrap',gap:14,marginTop:16,padding:'12px 16px',background:C.panel,borderRadius:12,border:`1px solid ${C.border}` }}>
+        <span style={{ display:'inline-flex',alignItems:'center',gap:6,fontSize:12,color:C.textDim }}>
+          <Icon name="repeat" size={13} color={C.cyan}/>Recurring task
+        </span>
         {Object.entries(SERVICES).map(([k,v])=>(
           <span key={k} style={{ display:'inline-flex',alignItems:'center',gap:6,fontSize:12,color:C.textDim }}>
             <span style={{ width:11,height:11,borderRadius:3,background:v.color }}/>{v.label}
@@ -1254,14 +1293,14 @@ function Schedule(){
   );
 }
 
-function MonthView({ cursor, appts, onDay, onAppt }){
+function MonthView({ cursor, appts, tasks, onDay, onAppt }){
   const y=cursor.getFullYear(), m=cursor.getMonth();
   const first=new Date(y,m,1).getDay();
   const days=new Date(y,m+1,0).getDate();
   const cells=[];
   for(let i=0;i<42;i++){ const dn=i-first+1;
     if(dn>0&&dn<=days){ const ds=`${y}-${pad2(m+1)}-${pad2(dn)}`;
-      cells.push({ dn, ds, list:appts.filter(a=>a.date===ds).sort((a,b)=>a.time.localeCompare(b.time)) }); }
+      cells.push({ dn, ds, tasks:taskOccurrences(tasks,ds), list:appts.filter(a=>a.date===ds).sort((a,b)=>a.time.localeCompare(b.time)) }); }
     else cells.push({ dn:null }); }
   return (
     <Card pad={0} style={{ overflow:'hidden' }}>
@@ -1286,7 +1325,18 @@ function MonthView({ cursor, appts, onDay, onAppt }){
                     {isToday && <span style={{ width:6,height:6,borderRadius:'50%',background:C.cyan }}/>}{c.dn}
                   </div>
                   <div style={{ display:'flex',flexDirection:'column',gap:3 }}>
-                    {c.list.slice(0,3).map(a=>(
+                    {c.tasks.slice(0,2).map(tk=>{ const pc=PRIORITY[tk.priority].color;
+                      return (
+                      <div key={tk.key} style={{ fontSize:10.5,padding:'2px 6px',borderRadius:5,
+                        background:tk.done?C.bg3:`${pc}1e`,color:tk.done?C.textMuted:pc,
+                        borderLeft:`2px solid ${pc}`,fontWeight:700,display:'flex',alignItems:'center',gap:3,
+                        whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',
+                        textDecoration:tk.done?'line-through':'none' }}>
+                        {tk.recurring && <Icon name="repeat" size={9} color={tk.done?C.textMuted:pc} style={{ flex:'0 0 auto' }}/>}
+                        <span style={{ overflow:'hidden',textOverflow:'ellipsis' }}>{tk.title}</span>
+                      </div>
+                    ); })}
+                    {c.list.slice(0,2).map(a=>(
                       <div key={a.id} onClick={e=>{e.stopPropagation();onAppt(a);}}
                         style={{ fontSize:10.5,padding:'2px 6px',borderRadius:5,
                         background:`${SERVICES[a.service].color}22`,color:SERVICES[a.service].color,
@@ -1295,7 +1345,7 @@ function MonthView({ cursor, appts, onDay, onAppt }){
                         {fmtTime(a.time).replace(':00','')} {a.customer.split(' ')[0]}
                       </div>
                     ))}
-                    {c.list.length>3 && <div style={{ fontSize:10,color:C.textDim,paddingLeft:6 }}>+{c.list.length-3} more</div>}
+                    {(c.tasks.length+c.list.length) > 4 && <div style={{ fontSize:10,color:C.textDim,paddingLeft:6 }}>+{c.tasks.length+c.list.length-4} more</div>}
                   </div>
                 </>
               )}
@@ -1307,10 +1357,12 @@ function MonthView({ cursor, appts, onDay, onAppt }){
   );
 }
 
-function WeekView({ cursor, appts, onAppt, onSlot }){
+function WeekView({ cursor, appts, tasks, onAppt, onSlot }){
   const start=startOfWeek(cursor);
   const days=[...Array(7)].map((_,i)=>{ const d=new Date(start); d.setDate(d.getDate()+i); return d; });
   const hours=[...Array(11)].map((_,i)=>i+7); // 7am - 5pm
+  const dayTasks=days.map(d=>taskOccurrences(tasks, iso(d)));
+  const anyTasks=dayTasks.some(t=>t.length);
   return (
     <Card pad={0} style={{ overflow:'auto' }}>
       <div style={{ display:'grid',gridTemplateColumns:'56px repeat(7,1fr)',minWidth:760 }}>
@@ -1320,6 +1372,20 @@ function WeekView({ cursor, appts, onAppt, onSlot }){
             <div style={{ fontSize:11,color:C.textDim }}>{d.toLocaleDateString('en-US',{weekday:'short'})}</div>
             <div style={{ fontSize:16,fontWeight:isT?800:600,color:isT?C.cyan:C.text }}>{d.getDate()}</div>
           </div>; })}
+        {anyTasks && <>
+          <div style={{ fontSize:9.5,color:C.textMuted,textAlign:'right',paddingRight:6,paddingTop:6,borderBottom:`1px solid ${C.border}`,textTransform:'uppercase',letterSpacing:.5 }}>Tasks</div>
+          {dayTasks.map((tks,di)=>(
+            <div key={di} style={{ borderLeft:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:3,display:'flex',flexDirection:'column',gap:2 }}>
+              {tks.map(tk=>{ const pc=PRIORITY[tk.priority].color;
+                return <div key={tk.key} style={{ fontSize:9.5,padding:'2px 5px',borderRadius:4,fontWeight:700,
+                  background:tk.done?C.bg3:`${pc}1e`,color:tk.done?C.textMuted:pc,borderLeft:`2px solid ${pc}`,
+                  display:'flex',alignItems:'center',gap:3,overflow:'hidden',textDecoration:tk.done?'line-through':'none' }}>
+                  {tk.recurring && <Icon name="repeat" size={8} color={tk.done?C.textMuted:pc} style={{ flex:'0 0 auto' }}/>}
+                  <span style={{ overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{tk.title}</span>
+                </div>; })}
+            </div>
+          ))}
+        </>}
         {hours.map(h=>(
           <React.Fragment key={h}>
             <div style={{ fontSize:10.5,color:C.textMuted,textAlign:'right',paddingRight:6,paddingTop:4,borderBottom:`1px solid ${C.border}`,height:58 }}>{fmtTime(pad2(h)+':00').replace(':00','')}</div>
@@ -1342,12 +1408,28 @@ function WeekView({ cursor, appts, onAppt, onSlot }){
   );
 }
 
-function DayView({ cursor, appts, onAppt, onSlot }){
+function DayView({ cursor, appts, tasks, onAppt, onSlot }){
   const ds=iso(cursor);
   const list=appts.filter(a=>a.date===ds).sort((a,b)=>a.time.localeCompare(b.time));
+  const dayTasks=taskOccurrences(tasks, ds);
   const hours=[...Array(12)].map((_,i)=>i+7);
   return (
     <Card pad={0} style={{ overflow:'hidden' }}>
+      {dayTasks.length>0 && (
+        <div style={{ display:'flex',borderBottom:`1px solid ${C.border}`,background:C.panel }}>
+          <div style={{ width:72,padding:'10px 12px',fontSize:11,color:C.textMuted,textAlign:'right',borderRight:`1px solid ${C.border}`,textTransform:'uppercase',letterSpacing:.5 }}>Tasks</div>
+          <div style={{ flex:1,padding:8,display:'flex',gap:8,flexWrap:'wrap' }}>
+            {dayTasks.map(tk=>{ const pc=PRIORITY[tk.priority].color;
+              return <div key={tk.key} style={{ padding:'7px 12px',borderRadius:9,background:tk.done?C.bg3:`${pc}1a`,
+                borderLeft:`3px solid ${pc}`,display:'inline-flex',alignItems:'center',gap:7,fontSize:13,fontWeight:700,
+                color:tk.done?C.textMuted:C.text,textDecoration:tk.done?'line-through':'none' }}>
+                {tk.recurring && <Icon name="repeat" size={13} color={pc}/>}
+                {tk.title}
+                <Avatar id={tk.assignedTo} size={20}/>
+              </div>; })}
+          </div>
+        </div>
+      )}
       {hours.map(h=>{ const slot=list.filter(a=>+a.time.split(':')[0]===h);
         return (
           <div key={h} onClick={()=>onSlot(ds)} style={{ display:'flex',borderBottom:`1px solid ${C.border}`,minHeight:62,cursor:'pointer' }}>
@@ -1523,16 +1605,42 @@ function TaskModal({ open, onClose, initial, asRequest, asSeries }){
   );
 }
 
-/* Urgency pill for a task's due date. Plain text when not urgent, colored pill otherwise. */
-function DueChip({ due, status }){
+/* Always-visible due-date pill, color-coded by urgency so dates are easy to scan. */
+function DueChip({ due, status, big }){
   const d = dueMeta(due, status);
-  if(d.level==='none')
-    return <span style={{ fontSize:11.5,color:C.textDim,display:'inline-flex',alignItems:'center',gap:4 }}>
-      <Icon name="clock" size={12} color={C.textDim}/>{d.label}</span>;
+  const muted = d.level==='none' || status==='completed';
+  const icon = d.level==='overdue' ? 'alert' : 'calendar';
   return <span className={d.level==='overdue'?'pulse-soft':''}
-    style={{ fontSize:11,fontWeight:800,letterSpacing:.2,color:d.color,background:`${d.color}1f`,
-      border:`1px solid ${d.color}66`,borderRadius:20,padding:'3px 9px',display:'inline-flex',alignItems:'center',gap:4 }}>
-    <Icon name={d.level==='overdue'?'alert':'clock'} size={12} color={d.color}/>{d.label}</span>;
+    style={{ fontSize:big?12.5:11.5,fontWeight:muted?700:800,letterSpacing:.2,color:d.color,
+      background:muted?C.bg3:`${d.color}22`,border:`1px solid ${muted?C.border:d.color+'77'}`,
+      borderRadius:8,padding:big?'5px 10px':'3px 9px',display:'inline-flex',alignItems:'center',gap:5,whiteSpace:'nowrap' }}>
+    <Icon name={icon} size={big?14:12} color={d.color}/>{d.label}</span>;
+}
+
+/* Bold priority tag — filled for High, outlined dot for Medium/Low, so priority pops. */
+function PriorityTag({ priority, big }){
+  const p=PRIORITY[priority]; const high=priority==='high';
+  return <span style={{ fontSize:big?12:11,fontWeight:800,letterSpacing:.3,textTransform:'uppercase',
+    color:high?'#1a0606':p.color, background:high?p.color:`${p.color}1f`,
+    border:`1px solid ${p.color}${high?'':'66'}`,borderRadius:8,padding:big?'5px 10px':'3px 8px',
+    display:'inline-flex',alignItems:'center',gap:5,whiteSpace:'nowrap' }}>
+    {high ? <Icon name="zap" size={big?13:12} color="#1a0606"/> : <span style={{ width:7,height:7,borderRadius:'50%',background:p.color }}/>}
+    {p.label}</span>;
+}
+
+/* Round check-off control. Completing a recurring instance spawns the next occurrence. */
+function DoneCheck({ task, size=22 }){
+  const { toggleDone } = useApp();
+  const done = task.status==='completed';
+  return (
+    <button title={done?'Mark not done':'Mark done'} onClick={e=>{ e.stopPropagation(); toggleDone(task.id); }}
+      style={{ width:size,height:size,flex:'0 0 auto',borderRadius:'50%',display:'grid',placeItems:'center',cursor:'pointer',
+        background:done?C.green:'transparent',border:`2px solid ${done?C.green:C.textMuted}`,transition:'all .15s' }}
+      onMouseEnter={e=>{ if(!done) e.currentTarget.style.borderColor=C.green; }}
+      onMouseLeave={e=>{ if(!done) e.currentTarget.style.borderColor=C.textMuted; }}>
+      {done && <Icon name="check2" size={size*0.6} color="#06090c"/>}
+    </button>
+  );
 }
 
 function TaskCard({ task, onClick, onDragStart, onDragEnd, dragging }){
@@ -1554,23 +1662,24 @@ function TaskCard({ task, onClick, onDragStart, onDragEnd, dragging }){
         borderLeft:`${flag?4:3}px solid ${high?C.red:p.color}` }}
       onMouseEnter={e=>{ if(!urgent) e.currentTarget.style.borderColor=C.borderHi; }}
       onMouseLeave={e=>{ if(!urgent) e.currentTarget.style.borderColor=flag?C.red+'44':C.border; }}>
-      <div style={{ display:'flex',justifyContent:'space-between',gap:8,marginBottom:7 }}>
-        <span style={{ fontSize:13.5,fontWeight:high?700:600,lineHeight:1.3,
-          display:'inline-flex',alignItems:'flex-start',gap:5 }} className="clamp2">
-          {high && <Icon name="flag" size={13} color={C.red} style={{ marginTop:2,flex:'0 0 auto' }}/>}
-          {task.title}
-        </span>
-        <div style={{ display:'flex',alignItems:'center',gap:6,flex:'0 0 auto' }}>
-          {task.seriesId && <Icon name="repeat" size={13} color={C.cyan} style={{ flex:'0 0 auto' }}/>}
-          <Badge color={high?C.red:p.color} solid={high}>{high&&'⚡ '}{p.label}</Badge>
-        </div>
-      </div>
-      {task.desc && <p style={{ fontSize:12,color:C.textDim,marginBottom:9 }} className="clamp2">{task.desc}</p>}
-      <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}>
-        <DueChip due={task.due} status={task.status}/>
-        <div style={{ display:'flex',alignItems:'center',gap:6 }}>
-          {task.comments.length>0 && <span style={{ fontSize:11,color:C.textDim,display:'inline-flex',alignItems:'center',gap:3 }}><Icon name="message" size={12}/>{task.comments.length}</span>}
-          <Avatar id={task.assignedTo} size={24}/>
+      <div style={{ display:'flex',gap:10,alignItems:'flex-start' }}>
+        <DoneCheck task={task}/>
+        <div style={{ flex:1,minWidth:0 }}>
+          <div style={{ display:'flex',justifyContent:'space-between',gap:8,marginBottom:8 }}>
+            <span style={{ fontSize:13.5,fontWeight:active?700:600,lineHeight:1.3,
+              color:active?C.text:C.textDim,textDecoration:active?'none':'line-through',
+              display:'inline-flex',alignItems:'flex-start',gap:5 }} className="clamp2">
+              {task.seriesId && <Icon name="repeat" size={13} color={C.cyan} style={{ marginTop:2,flex:'0 0 auto' }}/>}
+              {task.title}
+            </span>
+            <Avatar id={task.assignedTo} size={24}/>
+          </div>
+          {task.desc && <p style={{ fontSize:12,color:C.textDim,marginBottom:9 }} className="clamp2">{task.desc}</p>}
+          <div style={{ display:'flex',alignItems:'center',gap:7,flexWrap:'wrap' }}>
+            <PriorityTag priority={task.priority}/>
+            {active && <DueChip due={task.due} status={task.status}/>}
+            {task.comments.length>0 && <span style={{ fontSize:11,color:C.textDim,display:'inline-flex',alignItems:'center',gap:3,marginLeft:'auto' }}><Icon name="message" size={12}/>{task.comments.length}</span>}
+          </div>
         </div>
       </div>
       {/* On touch/mobile there's no drag — move the card by changing its status here. */}
@@ -1767,20 +1876,21 @@ function Tasks(){
             const active=t.status!=='completed'; const high=t.priority==='high'&&active;
             const urgent=dueMeta(t.due,t.status).level==='overdue'; const flag=high||urgent;
             return (
-              <div key={t.id} onClick={()=>openEdit(t)} style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 18px',
+              <div key={t.id} onClick={()=>openEdit(t)} style={{ display:'flex',alignItems:'center',gap:13,padding:'13px 18px',
                 borderBottom:i<boardTasks.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',
                 background:flag?`linear-gradient(90deg, ${C.red}12, transparent 40%)`:'transparent',
                 borderLeft:`${flag?4:3}px solid ${high?C.red:p.color}` }}
                 onMouseEnter={e=>e.currentTarget.style.background=C.bg2}
                 onMouseLeave={e=>e.currentTarget.style.background=flag?`linear-gradient(90deg, ${C.red}12, transparent 40%)`:'transparent'}>
-                <span style={{ width:9,height:9,borderRadius:'50%',background:col.color,flex:'0 0 auto' }}/>
+                <DoneCheck task={t} size={20}/>
                 <div style={{ flex:1,minWidth:0 }}>
-                  <div style={{ fontSize:14,fontWeight:high?700:600,display:'inline-flex',alignItems:'center',gap:6 }} className="clamp1">
-                    {high && <Icon name="flag" size={13} color={C.red} style={{ flex:'0 0 auto' }}/>}{t.title}</div>
+                  <div style={{ fontSize:14,fontWeight:active?700:600,color:active?C.text:C.textDim,
+                    textDecoration:active?'none':'line-through',display:'inline-flex',alignItems:'center',gap:6 }} className="clamp1">
+                    {t.seriesId && <Icon name="repeat" size={13} color={C.cyan} style={{ flex:'0 0 auto' }}/>}{t.title}</div>
                   {t.desc && <div style={{ fontSize:12,color:C.textDim }} className="clamp1">{t.desc}</div>}
                 </div>
-                <Badge color={high?C.red:p.color} solid={high}>{high&&'⚡ '}{p.label}</Badge>
-                <DueChip due={t.due} status={t.status}/>
+                <PriorityTag priority={t.priority}/>
+                {active && <DueChip due={t.due} status={t.status}/>}
                 <Avatar id={t.assignedTo} size={28}/>
               </div>
             ); })}
