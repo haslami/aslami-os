@@ -1909,6 +1909,7 @@ function Tasks(){
 }
 
 function RecurringView({ series, onEdit, onNew }){
+  const { tasks } = useApp();
   if(!series.length) return (
     <div style={{ textAlign:'center',padding:'48px 20px',border:`1px dashed ${C.border}`,borderRadius:16 }}>
       <Icon name="repeat" size={30} color={C.textMuted}/>
@@ -1920,22 +1921,31 @@ function RecurringView({ series, onEdit, onNew }){
   );
   return (
     <div style={{ display:'flex',flexDirection:'column',gap:10 }}>
-      {series.map(s=>{ const m=teamById(s.assignedTo); const next=nextOccurrence(s.recurrence, TODAY); const p=PRIORITY[s.priority];
+      <p style={{ fontSize:12.5,color:C.textDim,margin:'0 2px 2px' }}>Check off the current one and the next one is scheduled automatically.</p>
+      {series.map(s=>{ const next=nextOccurrence(s.recurrence, TODAY); const p=PRIORITY[s.priority];
+        /* the current actionable card for this series = its earliest still-open instance */
+        const cur=tasks.filter(t=>t.seriesId===s.id && t.status!=='completed').sort((a,b)=>(a.due||'').localeCompare(b.due||''))[0];
         return (
-          <div key={s.id} onClick={()=>onEdit(s)} style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 16px',
-            background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,cursor:'pointer',borderLeft:`3px solid ${C.cyan}` }}
+          <div key={s.id} style={{ display:'flex',alignItems:'center',gap:13,padding:'14px 16px',
+            background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,borderLeft:`3px solid ${C.cyan}` }}
             onMouseEnter={e=>e.currentTarget.style.borderColor=C.borderHi}
             onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-            <div style={{ width:38,height:38,borderRadius:10,flex:'0 0 auto',background:C.cyanDim,display:'grid',placeItems:'center' }}>
-              <Icon name="repeat" size={18} color={C.cyan}/>
+            {cur
+              ? <DoneCheck task={cur} size={26}/>
+              : <div title="Nothing due right now" style={{ width:26,height:26,flex:'0 0 auto',borderRadius:'50%',border:`2px dashed ${C.border}` }}/>}
+            <div onClick={()=>onEdit(s)} style={{ flex:1,minWidth:0,cursor:'pointer',display:'flex',alignItems:'center',gap:13 }}>
+              <div style={{ width:34,height:34,borderRadius:9,flex:'0 0 auto',background:C.cyanDim,display:'grid',placeItems:'center' }}>
+                <Icon name="repeat" size={16} color={C.cyan}/>
+              </div>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:14.5,fontWeight:700 }} className="clamp1">{s.title}</div>
+                <div style={{ fontSize:12.5,color:C.cyanBright }}>{scheduleLabel(s.recurrence)}</div>
+              </div>
             </div>
-            <div style={{ flex:1,minWidth:0 }}>
-              <div style={{ fontSize:14.5,fontWeight:700 }} className="clamp1">{s.title}</div>
-              <div style={{ fontSize:12.5,color:C.cyanBright }}>{scheduleLabel(s.recurrence)}</div>
-            </div>
-            <div style={{ textAlign:'right',display:'flex',flexDirection:'column',gap:3,alignItems:'flex-end' }}>
-              <Badge color={p.color}>{p.label}</Badge>
-              <span style={{ fontSize:11.5,color:C.textDim }}>{next?('Next: '+fmtDate(next)):'No more occurrences'}</span>
+            <div style={{ display:'flex',flexDirection:'column',gap:5,alignItems:'flex-end' }}>
+              <PriorityTag priority={s.priority}/>
+              {cur ? <DueChip due={cur.due} status={cur.status}/>
+                   : <span style={{ fontSize:11.5,color:C.textDim }}>{next?('Next: '+fmtDate(next)):'No more occurrences'}</span>}
             </div>
             <Avatar id={s.assignedTo} size={30}/>
           </div>
