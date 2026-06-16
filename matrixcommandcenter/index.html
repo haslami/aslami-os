@@ -1629,16 +1629,18 @@ function PriorityTag({ priority, big }){
 }
 
 /* Round check-off control. Completing a recurring instance spawns the next occurrence. */
-function DoneCheck({ task, size=22 }){
+function DoneCheck({ task, size=26 }){
   const { toggleDone } = useApp();
+  const [h,setH]=useState(false);
   const done = task.status==='completed';
   return (
     <button title={done?'Mark not done':'Mark done'} onClick={e=>{ e.stopPropagation(); toggleDone(task.id); }}
+      onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
       style={{ width:size,height:size,flex:'0 0 auto',borderRadius:'50%',display:'grid',placeItems:'center',cursor:'pointer',
-        background:done?C.green:'transparent',border:`2px solid ${done?C.green:C.textMuted}`,transition:'all .15s' }}
-      onMouseEnter={e=>{ if(!done) e.currentTarget.style.borderColor=C.green; }}
-      onMouseLeave={e=>{ if(!done) e.currentTarget.style.borderColor=C.textMuted; }}>
-      {done && <Icon name="check2" size={size*0.6} color="#06090c"/>}
+        background:done?C.green:(h?C.greenDim:C.bg3),
+        border:`2px solid ${done?C.green:(h?C.green:C.textDim)}`,
+        boxShadow:done?`0 0 10px ${C.green}77`:'none',transition:'all .15s' }}>
+      <Icon name="check2" size={size*0.58} color={done?'#06090c':(h?C.green:C.textMuted)} stroke={2.4}/>
     </button>
   );
 }
