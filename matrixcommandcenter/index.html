@@ -294,6 +294,16 @@ function scheduleLabel(rule){
   return s;
 }
 
+/* Short "how far away" label for a due date, e.g. "Today", "in 3 days", "2 days late". */
+function daysAway(ds){
+  const diff=Math.round((new Date(ds+'T00:00:00')-new Date(TODAY+'T00:00:00'))/86400000);
+  if(diff===0) return { txt:'Due today', n:0 };
+  if(diff===1) return { txt:'Due tomorrow', n:1 };
+  if(diff===-1) return { txt:'1 day late', n:-1 };
+  if(diff<0) return { txt:Math.abs(diff)+' days late', n:diff };
+  return { txt:'in '+diff+' days', n:diff };
+}
+
 /* All task occurrences on a date for the calendar: recurring series projected
    from their rule (no board materialization needed) plus one-off tasks due that
    day. `done` reflects a completed instance/task for that date. */
@@ -709,6 +719,31 @@ function AppProvider({ children }){
 
     /* Recurring series: a hidden template (self/Both only) that auto-spawns board instances */
     materializeRecurring,
+    /* Check off a series' current occurrence straight from the Recurring tab and roll
+       to the next due date — works whether or not the occurrence was pre-materialized. */
+    seriesCurrentDue:(seriesId)=>{ const tmpl=tasks.find(t=>t.id===seriesId);
+      if(!tmpl||!tmpl.recurrence) return null;
+      const open=tasks.filter(t=>t.seriesId===seriesId && t.status!=='completed').sort((a,b)=>(a.due||'').localeCompare(b.due||''));
+      return open.length ? open[0].due : nextOccurrence(tmpl.recurrence, TODAY);
+    },
+    advanceSeries:(seriesId)=>{ setTasks(prev=>{
+        const tmpl=prev.find(t=>t.id===seriesId && t.template && t.recurrence && !t.request);
+        if(!tmpl) return prev;
+        const open=prev.filter(t=>t.seriesId===seriesId && t.status!=='completed').sort((a,b)=>(a.due||'').localeCompare(b.due||''));
+        const curDue=open.length ? open[0].due : nextOccurrence(tmpl.recurrence, TODAY);
+        if(!curDue) return prev;
+        const curId=seriesId+':'+curDue;
+        let next=prev.some(t=>t.id===curId)
+          ? prev.map(t=>t.id===curId?{...t,status:'completed'}:t)
+          : [...prev,{ id:curId,seriesId,title:tmpl.title,desc:tmpl.desc||'',priority:tmpl.priority||'medium',assignedTo:tmpl.assignedTo,due:curDue,status:'completed',created:Date.now(),comments:[] }];
+        const nd=nextOccurrence(tmpl.recurrence, addDays(curDue,1));
+        const ndId=seriesId+':'+nd;
+        if(nd && !next.some(t=>t.id===ndId)) next=[...next,{ id:ndId,seriesId,title:tmpl.title,desc:tmpl.desc||'',
+          priority:tmpl.priority||'medium',assignedTo:tmpl.assignedTo,due:nd,status:'not-started',created:Date.now(),comments:[] }];
+        return next;
+      });
+      toast('Done ✓ next one scheduled');
+    },
     addSeries:(t)=>{ setTasks(p=>[...p,{...t,id:uid(),template:true,created:Date.now(),comments:[]}]);
       materializeRecurring(); toast('Recurring task created'); },
     delSeries:(id)=>{ setTasks(p=>p.filter(t=>t.id!==id)); toast('Recurring task stopped','info'); },
@@ -1909,7 +1944,7 @@ function Tasks(){
 }
 
 function RecurringView({ series, onEdit, onNew }){
-  const { tasks } = useApp();
+  const { seriesCurrentDue, advanceSeries } = useApp();
   if(!series.length) return (
     <div style={{ textAlign:'center',padding:'48px 20px',border:`1px dashed ${C.border}`,borderRadius:16 }}>
       <Icon name="repeat" size={30} color={C.textMuted}/>
@@ -1919,33 +1954,41 @@ function RecurringView({ series, onEdit, onNew }){
       <Btn icon="repeat" onClick={onNew}>New Recurring Task</Btn>
     </div>
   );
+  /* soonest-due first, so what's coming up rises to the top */
+  const rows=series.map(s=>({ s, due:seriesCurrentDue(s.id) }))
+    .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
   return (
     <div style={{ display:'flex',flexDirection:'column',gap:10 }}>
-      <p style={{ fontSize:12.5,color:C.textDim,margin:'0 2px 2px' }}>Check off the current one and the next one is scheduled automatically.</p>
-      {series.map(s=>{ const next=nextOccurrence(s.recurrence, TODAY); const p=PRIORITY[s.priority];
-        /* the current actionable card for this series = its earliest still-open instance */
-        const cur=tasks.filter(t=>t.seriesId===s.id && t.status!=='completed').sort((a,b)=>(a.due||'').localeCompare(b.due||''))[0];
+      <p style={{ fontSize:12.5,color:C.textDim,margin:'0 2px 2px' }}>Check off the current one and it rolls to the next due date automatically.</p>
+      {rows.map(({s,due})=>{
+        const meta = due ? daysAway(due) : null;
+        const lvl = !meta ? 'none' : meta.n<0?'overdue':meta.n===0?'today':meta.n<=2?'soon':'none';
+        const col = lvl==='overdue'?C.red:lvl==='today'?C.orange:lvl==='soon'?C.gold:C.cyan;
+        const coming = lvl!=='none';
         return (
-          <div key={s.id} style={{ display:'flex',alignItems:'center',gap:13,padding:'14px 16px',
-            background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,borderLeft:`3px solid ${C.cyan}` }}
-            onMouseEnter={e=>e.currentTarget.style.borderColor=C.borderHi}
-            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-            {cur
-              ? <DoneCheck task={cur} size={26}/>
-              : <div title="Nothing due right now" style={{ width:26,height:26,flex:'0 0 auto',borderRadius:'50%',border:`2px dashed ${C.border}` }}/>}
-            <div onClick={()=>onEdit(s)} style={{ flex:1,minWidth:0,cursor:'pointer',display:'flex',alignItems:'center',gap:13 }}>
-              <div style={{ width:34,height:34,borderRadius:9,flex:'0 0 auto',background:C.cyanDim,display:'grid',placeItems:'center' }}>
-                <Icon name="repeat" size={16} color={C.cyan}/>
-              </div>
-              <div style={{ flex:1,minWidth:0 }}>
-                <div style={{ fontSize:14.5,fontWeight:700 }} className="clamp1">{s.title}</div>
-                <div style={{ fontSize:12.5,color:C.cyanBright }}>{scheduleLabel(s.recurrence)}</div>
-              </div>
+          <div key={s.id} className={lvl==='overdue'?'glow-red':''} style={{ display:'flex',alignItems:'center',gap:13,padding:'14px 16px',
+            background:coming?`${col}10`:C.bg2,border:`1px solid ${coming?col+'55':C.border}`,borderRadius:12,
+            borderLeft:`4px solid ${coming?col:C.cyan}`,transition:'border-color .15s' }}>
+            <button title="Mark this one done — schedules the next" onClick={()=>advanceSeries(s.id)}
+              style={{ width:30,height:30,flex:'0 0 auto',borderRadius:'50%',display:'grid',placeItems:'center',cursor:'pointer',
+                background:C.bg3,border:`2px solid ${coming?col:C.textDim}`,transition:'all .15s' }}
+              onMouseEnter={e=>{ e.currentTarget.style.background=C.greenDim; e.currentTarget.style.borderColor=C.green; }}
+              onMouseLeave={e=>{ e.currentTarget.style.background=C.bg3; e.currentTarget.style.borderColor=coming?col:C.textDim; }}>
+              <Icon name="check2" size={17} color={coming?col:C.textMuted} stroke={2.4}/>
+            </button>
+            <div onClick={()=>onEdit(s)} style={{ flex:1,minWidth:0,cursor:'pointer' }}>
+              <div style={{ fontSize:15,fontWeight:coming?800:700,display:'inline-flex',alignItems:'center',gap:6 }} className="clamp1">
+                <Icon name="repeat" size={14} color={C.cyan} style={{ flex:'0 0 auto' }}/>{s.title}</div>
+              <div style={{ fontSize:12,color:C.textDim }}>{scheduleLabel(s.recurrence)}</div>
             </div>
-            <div style={{ display:'flex',flexDirection:'column',gap:5,alignItems:'flex-end' }}>
+            <div style={{ display:'flex',flexDirection:'column',gap:5,alignItems:'flex-end',flex:'0 0 auto' }}>
               <PriorityTag priority={s.priority}/>
-              {cur ? <DueChip due={cur.due} status={cur.status}/>
-                   : <span style={{ fontSize:11.5,color:C.textDim }}>{next?('Next: '+fmtDate(next)):'No more occurrences'}</span>}
+              {meta
+                ? <span className={lvl==='overdue'?'pulse-soft':''} style={{ fontSize:12.5,fontWeight:coming?800:700,color:col,
+                    background:`${col}1f`,border:`1px solid ${col}66`,borderRadius:8,padding:'4px 9px',
+                    display:'inline-flex',alignItems:'center',gap:5,whiteSpace:'nowrap' }}>
+                    <Icon name="calendar" size={13} color={col}/>{meta.txt} · {fmtDate(due)}</span>
+                : <span style={{ fontSize:11.5,color:C.textMuted }}>Ended</span>}
             </div>
             <Avatar id={s.assignedTo} size={30}/>
           </div>
