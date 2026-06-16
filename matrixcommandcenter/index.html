@@ -2138,10 +2138,135 @@ function Finance(){
   const monthly=revMonthly(live);
   const jobsThisMonth=live.filter(a=>a.date>=mStart&&a.date<=TODAY).length;
   const ceramicRev=live.filter(a=>a.service==='ceramic'&&a.date>=mStart&&a.date<=TODAY).reduce((s,a)=>s+(a.price||0),0);
+  const [shData,setShData]=useState(null);
+  const [shStatus,setShStatus]=useState('loading');
+  useEffect(()=>{
+    fetch('/.netlify/functions/sheets')
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.error){ setShStatus(d.error.includes('not configured')?'unconfigured':'error'); return; }
+        setShData(d); setShStatus('ok');
+      })
+      .catch(()=>setShStatus('error'));
+  },[]);
 
   return (
     <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
-      <PageHead title="Finance" sub="Revenue from booked jobs (GoHighLevel)"/>
+      <PageHead title="Finance" sub="Matrix Mobile Details · 2026"/>
+
+      {/* === GOOGLE SHEETS LIVE DATA === */}
+      {shStatus==='loading' && (
+        <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:16 }}>
+          {[1,2,3].map(i=>(<div key={i} style={{ height:88,borderRadius:12,background:C.panel }} className="pulse-soft"/>))}
+        </div>
+      )}
+      {shStatus==='unconfigured' && (
+        <Card pad={20} style={{ marginBottom:16,borderColor:C.gold+'44',background:`${C.gold}08` }}>
+          <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
+            <Icon name="alert" size={18} color={C.gold}/>
+            <div>
+              <div style={{ fontWeight:700,fontSize:14,color:C.gold,marginBottom:8 }}>Connect Google Sheets — 3 quick steps</div>
+              <div style={{ fontSize:12.5,color:C.textDim,lineHeight:2 }}>
+                1. Google Cloud Console → Enable Sheets API → Create API Key<br/>
+                2. Open Matrix Finances → Share → Anyone with the link → Viewer<br/>
+                3. Netlify → Site Settings → Environment Variables → add <code style={{ background:C.bg3,padding:'1px 7px',borderRadius:4,color:C.green }}>SHEETS_API_KEY</code>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+      {shStatus==='error' && (
+        <Card pad={16} style={{ marginBottom:16,borderColor:C.red+'44',background:`${C.red}08`,fontSize:12.5,color:C.red }}>
+          Could not load Google Sheets data. Check that the sheet is shared as "Anyone with link can view" and SHEETS_API_KEY is valid in Netlify env vars.
+        </Card>
+      )}
+      {shStatus==='ok' && shData && (
+        <>
+          {/* Year Revenue Cards */}
+          <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12 }}>
+            <h2 style={{ fontSize:15,fontWeight:700 }}>2026 Year Revenue</h2>
+            <span style={{ display:'flex',alignItems:'center',gap:5,fontSize:11,color:C.green,background:`${C.green}18`,padding:'2px 9px',borderRadius:20,fontWeight:600 }}>
+              <span style={{ width:6,height:6,borderRadius:'50%',background:C.green,flexShrink:0 }}/>
+              Live · Google Sheets
+            </span>
+          </div>
+          <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:18 }} className="grid-resp">
+            <Card pad={18} style={{ borderColor:C.green+'44' }}>
+              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Gross Revenue</div>
+              <div style={{ fontSize:26,fontWeight:800,color:C.green }}>{fmt$(shData.yearGross)}</div>
+            </Card>
+            <Card pad={18} style={{ borderColor:C.red+'33' }}>
+              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Total Expenses</div>
+              <div style={{ fontSize:26,fontWeight:800,color:C.red }}>{fmt$(shData.yearExpenses)}</div>
+            </Card>
+            <Card pad={18} style={{ borderColor:C.cyan+'33' }}>
+              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Net Income</div>
+              <div style={{ fontSize:26,fontWeight:800,color:shData.yearNet>=0?C.cyan:C.red }}>{fmt$(shData.yearNet)}</div>
+            </Card>
+          </div>
+
+          {/* Monthly Revenue Tracker */}
+          {shData.monthly.length>0 && (
+            <Card pad={20} style={{ marginBottom:16 }}>
+              <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Monthly Revenue Tracker</h3>
+              <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>Aggregated from pay period data · Google Sheets</p>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={shData.monthly} margin={{ top:5,right:8,left:-18,bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+                  <XAxis dataKey="month" tick={{ fontSize:11 }} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+Math.round(v/1000)+'k'}/>
+                  <RTooltip content={<ChartTip money/>} cursor={{ fill:'rgba(31,197,106,0.06)' }}/>
+                  <Bar dataKey="gross" radius={[5,5,0,0]} name="Gross Revenue">
+                    {shData.monthly.map((e,i)=><Cell key={i} fill={C.green}/>)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+
+          {/* Pay Period Revenue Tracker */}
+          {shData.payPeriods.length>0 && (
+            <Card pad={0} style={{ marginBottom:20,overflow:'hidden' }}>
+              <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
+                <h3 style={{ fontSize:15,fontWeight:700 }}>Pay Period Revenue Tracker</h3>
+                <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>{shData.payPeriods.length} periods · newest first</p>
+              </div>
+              <div>
+                {shData.payPeriods.slice().reverse().map((p,idx)=>{
+                  const isLatest=idx===0;
+                  const pctOfYear=shData.yearGross>0?Math.round(p.gross/shData.yearGross*100):0;
+                  const maxG=Math.max(...shData.payPeriods.map(x=>x.gross));
+                  const barW=maxG>0?Math.round(p.gross/maxG*100):0;
+                  return (
+                    <div key={p.label} style={{ display:'flex',alignItems:'center',gap:14,padding:'11px 20px',borderBottom:`1px solid ${C.border}22`,background:isLatest?`${C.green}08`:'transparent' }}>
+                      <div style={{ width:110,fontSize:13,fontWeight:isLatest?700:500,color:isLatest?C.green:C.text,flexShrink:0 }}>
+                        {p.label}
+                        {isLatest && <div style={{ fontSize:10,color:C.green,fontWeight:600,marginTop:1 }}>LATEST</div>}
+                      </div>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ display:'flex',alignItems:'baseline',gap:8,marginBottom:5 }}>
+                          <span style={{ fontSize:14,fontWeight:700,color:C.text }}>{fmt$(p.gross)}</span>
+                          <span style={{ fontSize:11,color:C.textDim }}>{pctOfYear}% of year</span>
+                          {p.net!==0 && <span style={{ fontSize:11,color:p.net>=0?C.green:C.red,marginLeft:'auto' }}>net {fmt$(p.net)}</span>}
+                        </div>
+                        <div style={{ height:4,background:C.bg3,borderRadius:2,overflow:'hidden' }}>
+                          <div style={{ height:'100%',width:barW+'%',background:isLatest?C.green:`${C.green}55`,borderRadius:2 }}/>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
+          <div style={{ height:1,background:C.border,margin:'4px 0 20px' }}/>
+          <div style={{ fontSize:11.5,color:C.textDim,marginBottom:14,display:'flex',alignItems:'center',gap:6 }}>
+            <Icon name="chart" size={12} color={C.textDim}/>
+            GHL live booking data
+          </div>
+        </>
+      )}
 
       {/* Period selector + totals */}
       <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
