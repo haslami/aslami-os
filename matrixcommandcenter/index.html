@@ -1943,8 +1943,67 @@ function Tasks(){
   );
 }
 
+/* Urgency tier + color for a recurring series' current due date. */
+function recurLevel(meta){
+  if(!meta) return { lvl:'ended', col:C.textMuted };
+  if(meta.n<0)  return { lvl:'overdue', col:C.red };
+  if(meta.n===0)return { lvl:'today',   col:C.orange };
+  if(meta.n<=2) return { lvl:'soon',    col:C.gold };
+  if(meta.n<=7) return { lvl:'week',    col:C.cyanBright };
+  return { lvl:'future', col:C.cyan };
+}
+/* Big-number countdown text for the right-hand badge. */
+function countdownParts(meta){
+  if(!meta) return { big:'—', sub:'ended' };
+  if(meta.n<0)   return { big:String(Math.abs(meta.n)), sub:Math.abs(meta.n)===1?'day late':'days late' };
+  if(meta.n===0) return { big:'TODAY', sub:'due now', word:true };
+  return { big:String(meta.n), sub:meta.n===1?'day left':'days left' };
+}
+
+/* One recurring series row: big check-off (rolls to next period), title +
+   schedule, and a prominent days-left / due-date countdown. */
+function RecurringCard({ s, due, onEdit }){
+  const { advanceSeries } = useApp();
+  const [h,setH]=useState(false);
+  const meta = due ? daysAway(due) : null;
+  const { lvl, col } = recurLevel(meta);
+  const cp = countdownParts(meta);
+  return (
+    <div className={lvl==='overdue'?'glow-red':''} style={{ display:'flex',alignItems:'stretch',
+      background:C.bg2,border:`1px solid ${col}44`,borderLeft:`4px solid ${col}`,borderRadius:14,overflow:'hidden' }}>
+      {/* check off this period */}
+      <div style={{ display:'flex',alignItems:'center',padding:'0 6px 0 12px' }}>
+        <button title="Done for this period — schedules the next one automatically"
+          onClick={()=>advanceSeries(s.id)} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+          style={{ width:40,height:40,flex:'0 0 auto',borderRadius:'50%',display:'grid',placeItems:'center',cursor:'pointer',
+            background:h?C.green:C.bg3, border:`2px solid ${h?C.green:col}`,
+            boxShadow:h?`0 0 12px ${C.green}66`:'none', transition:'all .15s' }}>
+          <Icon name="check2" size={21} color={h?'#06090c':col} stroke={2.6}/>
+        </button>
+      </div>
+      {/* title + schedule + priority */}
+      <div onClick={()=>onEdit(s)} style={{ flex:1,minWidth:0,padding:'12px 8px',display:'flex',flexDirection:'column',gap:6,justifyContent:'center',cursor:'pointer' }}>
+        <div className="clamp1" style={{ fontSize:15,fontWeight:800,display:'inline-flex',alignItems:'center',gap:7 }}>
+          <Icon name="repeat" size={13} color={C.cyan} style={{ flex:'0 0 auto' }}/>{s.title}</div>
+        <div style={{ display:'flex',alignItems:'center',gap:8,flexWrap:'wrap' }}>
+          <span style={{ fontSize:12,color:C.textDim,display:'inline-flex',alignItems:'center',gap:4 }}>
+            <Icon name="calendar" size={11} color={C.textMuted}/>{scheduleLabel(s.recurrence)}</span>
+          <PriorityTag priority={s.priority}/>
+        </div>
+      </div>
+      {/* days-left / due-date countdown */}
+      <div style={{ flex:'0 0 auto',width:104,background:`${col}16`,borderLeft:`1px solid ${col}33`,
+        display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'8px 4px',textAlign:'center' }}>
+        <div className={lvl==='overdue'?'pulse-soft':''} style={{ fontSize:cp.word?17:27,fontWeight:900,color:col,lineHeight:1 }}>{cp.big}</div>
+        <div style={{ fontSize:9.5,fontWeight:800,color:col,textTransform:'uppercase',letterSpacing:.5,marginTop:3 }}>{cp.sub}</div>
+        <div style={{ fontSize:10.5,color:C.textDim,marginTop:4,whiteSpace:'nowrap' }}>{due?fmtDate(due):''}</div>
+      </div>
+    </div>
+  );
+}
+
 function RecurringView({ series, onEdit, onNew }){
-  const { seriesCurrentDue, advanceSeries } = useApp();
+  const { seriesCurrentDue } = useApp();
   if(!series.length) return (
     <div style={{ textAlign:'center',padding:'48px 20px',border:`1px dashed ${C.border}`,borderRadius:16 }}>
       <Icon name="repeat" size={30} color={C.textMuted}/>
@@ -1954,45 +2013,38 @@ function RecurringView({ series, onEdit, onNew }){
       <Btn icon="repeat" onClick={onNew}>New Recurring Task</Btn>
     </div>
   );
-  /* soonest-due first, so what's coming up rises to the top */
-  const rows=series.map(s=>({ s, due:seriesCurrentDue(s.id) }))
+  /* attach each series' current due date, then split into Habib / Ryan / Both,
+     each sorted soonest-due first (most overdue at the top). */
+  const withDue = series.map(s=>({ s, due:seriesCurrentDue(s.id) }));
+  const groupRows = id => withDue
+    .filter(r=>r.s.assignedTo===id)
     .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
+  const known = ['habib','partner','both'];
+  const groups = known.map(id=>({ id, rows:groupRows(id) }));
+  const leftover = withDue.filter(r=>!known.includes(r.s.assignedTo));
+  if(leftover.length) groups.push({ id:'other', rows:leftover.sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999')) });
+
   return (
-    <div style={{ display:'flex',flexDirection:'column',gap:10 }}>
-      <p style={{ fontSize:12.5,color:C.textDim,margin:'0 2px 2px' }}>Check off the current one and it rolls to the next due date automatically.</p>
-      {rows.map(({s,due})=>{
-        const meta = due ? daysAway(due) : null;
-        const lvl = !meta ? 'none' : meta.n<0?'overdue':meta.n===0?'today':meta.n<=2?'soon':'none';
-        const col = lvl==='overdue'?C.red:lvl==='today'?C.orange:lvl==='soon'?C.gold:C.cyan;
-        const coming = lvl!=='none';
+    <div style={{ display:'flex',flexDirection:'column',gap:24 }}>
+      <p style={{ fontSize:12.5,color:C.textDim,margin:'0 2px' }}>
+        Tap the <Icon name="check2" size={12} color={C.cyan}/> to finish this period — it instantly rolls to the next due date and resets the countdown.</p>
+      {groups.map(g=>{
+        if(!g.rows.length) return null;
+        const m = teamById(g.id);
         return (
-          <div key={s.id} className={lvl==='overdue'?'glow-red':''} style={{ display:'flex',alignItems:'center',gap:13,padding:'14px 16px',
-            background:coming?`${col}10`:C.bg2,border:`1px solid ${coming?col+'55':C.border}`,borderRadius:12,
-            borderLeft:`4px solid ${coming?col:C.cyan}`,transition:'border-color .15s' }}>
-            <button title="Mark this one done — schedules the next" onClick={()=>advanceSeries(s.id)}
-              style={{ width:30,height:30,flex:'0 0 auto',borderRadius:'50%',display:'grid',placeItems:'center',cursor:'pointer',
-                background:C.bg3,border:`2px solid ${coming?col:C.textDim}`,transition:'all .15s' }}
-              onMouseEnter={e=>{ e.currentTarget.style.background=C.greenDim; e.currentTarget.style.borderColor=C.green; }}
-              onMouseLeave={e=>{ e.currentTarget.style.background=C.bg3; e.currentTarget.style.borderColor=coming?col:C.textDim; }}>
-              <Icon name="check2" size={17} color={coming?col:C.textMuted} stroke={2.4}/>
-            </button>
-            <div onClick={()=>onEdit(s)} style={{ flex:1,minWidth:0,cursor:'pointer' }}>
-              <div style={{ fontSize:15,fontWeight:coming?800:700,display:'inline-flex',alignItems:'center',gap:6 }} className="clamp1">
-                <Icon name="repeat" size={14} color={C.cyan} style={{ flex:'0 0 auto' }}/>{s.title}</div>
-              <div style={{ fontSize:12,color:C.textDim }}>{scheduleLabel(s.recurrence)}</div>
+          <div key={g.id}>
+            <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:12,paddingBottom:9,borderBottom:`1px solid ${m.color}30` }}>
+              <Avatar id={g.id} size={28}/>
+              <span style={{ fontSize:15.5,fontWeight:800,color:m.color }}>{m.name}</span>
+              <span style={{ fontSize:11,fontWeight:700,color:C.textDim }}>recurring</span>
+              <span style={{ fontSize:11.5,fontWeight:800,color:m.color,background:`${m.color}1c`,borderRadius:20,padding:'2px 9px',minWidth:22,textAlign:'center' }}>{g.rows.length}</span>
             </div>
-            <div style={{ display:'flex',flexDirection:'column',gap:5,alignItems:'flex-end',flex:'0 0 auto' }}>
-              <PriorityTag priority={s.priority}/>
-              {meta
-                ? <span className={lvl==='overdue'?'pulse-soft':''} style={{ fontSize:12.5,fontWeight:coming?800:700,color:col,
-                    background:`${col}1f`,border:`1px solid ${col}66`,borderRadius:8,padding:'4px 9px',
-                    display:'inline-flex',alignItems:'center',gap:5,whiteSpace:'nowrap' }}>
-                    <Icon name="calendar" size={13} color={col}/>{meta.txt} · {fmtDate(due)}</span>
-                : <span style={{ fontSize:11.5,color:C.textMuted }}>Ended</span>}
+            <div style={{ display:'flex',flexDirection:'column',gap:10 }}>
+              {g.rows.map(({s,due})=><RecurringCard key={s.id} s={s} due={due} onEdit={onEdit}/>)}
             </div>
-            <Avatar id={s.assignedTo} size={30}/>
           </div>
-        ); })}
+        );
+      })}
     </div>
   );
 }
