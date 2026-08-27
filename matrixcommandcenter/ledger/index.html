@@ -1,0 +1,1445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0E13">
+<meta name="robots" content="noindex">
+<title>Matrix Ledger</title>
+<link rel="icon" href="../favicon-32.png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;600;800&display=swap">
+<!-- Loaded before the app script so the sync layer can see window.supabase on first run. -->
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+<style>
+:root{
+  --bg:#0B0E13; --surf:#141922; --surf2:#1B2230; --surf3:#232C3C;
+  --ink:#EAEEF5; --ink2:#AEB9C9; --mut:#7C8899; --line:#242D3B; --line2:#334052;
+  --accent:#FF6B2C; --accent-ink:#180800; --accent-soft:#2A1409;
+  --pos:#2ED8A0; --pos-soft:#0C2E25; --neg:#FF5D6C; --neg-soft:#2E1216;
+  --warn:#F0B23E; --warn-soft:#2E240E; --cash:#4EA8FF; --cash-soft:#0D2540;
+  --r:14px; --shadow:0 1px 0 #ffffff08 inset, 0 18px 40px -24px #000C;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    --bg:#F2F4F8; --surf:#FFFFFF; --surf2:#F5F7FA; --surf3:#E9EDF3;
+    --ink:#0D1117; --ink2:#3B4757; --mut:#68748A; --line:#DFE5EC; --line2:#C9D3DF;
+    --accent:#D8501A; --accent-ink:#FFFFFF; --accent-soft:#FDEBE2;
+    --pos:#0B8A63; --pos-soft:#DCF3EA; --neg:#C0343E; --neg-soft:#FBE5E7;
+    --warn:#9A6A0C; --warn-soft:#FAF0DA; --cash:#1466B8; --cash-soft:#E1EEFB;
+    --shadow:0 1px 2px #0D111708, 0 14px 32px -22px #0D111740;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#F2F4F8; --surf:#FFFFFF; --surf2:#F5F7FA; --surf3:#E9EDF3;
+  --ink:#0D1117; --ink2:#3B4757; --mut:#68748A; --line:#DFE5EC; --line2:#C9D3DF;
+  --accent:#D8501A; --accent-ink:#FFFFFF; --accent-soft:#FDEBE2;
+  --pos:#0B8A63; --pos-soft:#DCF3EA; --neg:#C0343E; --neg-soft:#FBE5E7;
+  --warn:#9A6A0C; --warn-soft:#FAF0DA; --cash:#1466B8; --cash-soft:#E1EEFB;
+  --shadow:0 1px 2px #0D111708, 0 14px 32px -22px #0D111740;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:Manrope,system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.mono,.num,td.n,th.n{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+.app{display:grid;grid-template-columns:1fr;min-height:100vh}
+@media(min-width:900px){ .app{grid-template-columns:214px 1fr} }
+.side{background:var(--surf);border-right:1px solid var(--line);padding:1rem .8rem;display:flex;flex-direction:column;gap:.15rem}
+@media(max-width:899px){ .side{position:fixed;bottom:0;left:0;right:0;z-index:40;flex-direction:row;border-right:none;
+  border-top:1px solid var(--line);padding:.35rem;overflow-x:auto;gap:.2rem} }
+.brand{display:flex;align-items:center;gap:.55rem;padding:.2rem .5rem 1rem}
+@media(max-width:899px){ .brand{display:none} }
+.dot{width:26px;height:26px;border-radius:8px;background:linear-gradient(145deg,var(--accent),#FF9A5C);flex:0 0 auto}
+.brand b{font-weight:800;letter-spacing:-.02em}
+.brand span{display:block;font-family:"JetBrains Mono",monospace;font-size:.56rem;letter-spacing:.14em;text-transform:uppercase;color:var(--mut)}
+.nav{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border-radius:10px;border:none;background:none;
+  color:var(--ink2);font:inherit;font-weight:600;cursor:pointer;width:100%;text-align:left;white-space:nowrap;font-size:.92rem}
+.nav:hover{background:var(--surf2);color:var(--ink)}
+.nav[aria-current="true"]{background:var(--accent-soft);color:var(--accent)}
+.nav i{width:16px;text-align:center;font-style:normal;flex:0 0 auto}
+@media(max-width:899px){ .nav{flex-direction:column;gap:.1rem;font-size:.58rem;padding:.35rem .45rem;min-width:58px;text-align:center} }
+.side .spacer{flex:1}
+.syncbox{font-family:"JetBrains Mono",monospace;font-size:.58rem;color:var(--mut);padding:.5rem .6rem;line-height:1.5}
+@media(max-width:899px){ .syncbox{display:none} }
+main{padding:clamp(.9rem,2.5vw,1.8rem);padding-bottom:5.5rem;max-width:1180px}
+@media(min-width:900px){ main{padding-bottom:2rem} }
+
+.top{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin-bottom:1.1rem}
+.top h1{font-size:1.32rem;font-weight:800;letter-spacing:-.03em;margin:0;margin-right:auto}
+.top h1 small{display:block;font-size:.68rem;font-weight:500;color:var(--mut);letter-spacing:0}
+select,input,textarea{font:inherit;color:var(--ink);background:var(--surf);border:1px solid var(--line2);
+  border-radius:10px;padding:.42rem .6rem;min-width:0}
+textarea{font-family:"JetBrains Mono",monospace;font-size:.78rem}
+select:focus-visible,input:focus-visible,textarea:focus-visible,button:focus-visible,.nav:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button{font:inherit;font-weight:600;cursor:pointer;border-radius:10px;border:1px solid var(--line2);
+  background:var(--surf);color:var(--ink);padding:.42rem .8rem}
+button:hover{background:var(--surf2)}
+button.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+button.sm{padding:.26rem .55rem;font-size:.8rem;font-weight:500}
+button.danger{color:var(--neg)}
+button.ghost{background:none}
+
+.card{background:var(--surf);border:1px solid var(--line);border-radius:var(--r);padding:1rem 1.1rem;box-shadow:var(--shadow);margin-bottom:.9rem}
+.card>:last-child{margin-bottom:0}
+.card h2{font-size:.95rem;font-weight:700;margin:0 0 .2rem;letter-spacing:-.01em}
+.card .sub{color:var(--mut);font-size:.82rem;margin:0 0 .8rem}
+.hero{background:radial-gradient(120% 140% at 100% 0%, color-mix(in srgb,var(--accent) 16%,transparent) 0%, transparent 55%),var(--surf);
+  border:1px solid var(--line);border-radius:var(--r);padding:1.2rem 1.3rem;margin-bottom:.9rem;box-shadow:var(--shadow)}
+.hero .lbl{font-family:"JetBrains Mono",monospace;font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--mut)}
+.hero .big{font-size:clamp(2.2rem,7vw,3.4rem);font-weight:800;letter-spacing:-.04em;line-height:1;margin:.3rem 0 .1rem}
+.hero .big.pos{color:var(--pos)} .hero .big.neg{color:var(--neg)}
+.hero .strip{display:flex;flex-wrap:wrap;gap:.35rem .9rem;margin-top:.7rem;font-size:.82rem;color:var(--ink2)}
+.hero .strip b{font-family:"JetBrains Mono",monospace}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.6rem,1fr));gap:.6rem;margin-bottom:.9rem}
+.kpi{background:var(--surf);border:1px solid var(--line);border-radius:12px;padding:.7rem .8rem;box-shadow:var(--shadow)}
+.kpi .k{font-family:"JetBrains Mono",monospace;font-size:.56rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);display:block;margin-bottom:.25rem}
+.kpi .v{font-size:1.22rem;font-weight:800;letter-spacing:-.03em;display:block;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:.71rem;color:var(--mut);display:block;margin-top:.1rem}
+.kpi.pos .v{color:var(--pos)} .kpi.neg .v{color:var(--neg)} .kpi.warn .v{color:var(--warn)} .kpi.cash .v{color:var(--cash)}
+.pill{display:inline-flex;align-items:center;gap:.28rem;font-family:"JetBrains Mono",monospace;font-size:.56rem;
+  letter-spacing:.1em;text-transform:uppercase;font-weight:700;padding:.22em .5em;border-radius:5px;white-space:nowrap}
+.pill.solo{background:var(--accent-soft);color:var(--accent)}
+.pill.pos{background:var(--pos-soft);color:var(--pos)} .pill.neg{background:var(--neg-soft);color:var(--neg)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)} .pill.mut{background:var(--surf3);color:var(--mut)}
+.pill.cash{background:var(--cash-soft);color:var(--cash)}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surf)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+th,td{padding:.46rem .65rem;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+thead th{background:var(--surf2);font-family:"JetBrains Mono",monospace;font-size:.56rem;letter-spacing:.11em;text-transform:uppercase;color:var(--mut);font-weight:700}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--surf2)}
+td.n,th.n{text-align:right}
+tfoot td{font-weight:800;background:var(--surf2);border-top:1px solid var(--line2)}
+.empty{padding:1.8rem;text-align:center;color:var(--mut);font-size:.88rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.4rem,1fr));gap:.55rem}
+.f{display:flex;flex-direction:column;gap:.22rem}
+.f label{font-family:"JetBrains Mono",monospace;font-size:.56rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+.f input,.f select{width:100%}
+.bar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.75rem}
+.hint{font-size:.78rem;color:var(--mut)}
+.two{display:grid;grid-template-columns:1fr;gap:.9rem}
+@media(min-width:920px){ .two{grid-template-columns:1fr 1fr} }
+.view[hidden]{display:none}
+
+/* money moves */
+.move{display:grid;grid-template-columns:auto 1fr auto;gap:.7rem;align-items:start;padding:.7rem .8rem;
+  border:1px solid var(--line);border-radius:12px;background:var(--surf2);margin-bottom:.5rem}
+.move.done{opacity:.5}
+.move .tick{width:24px;height:24px;border-radius:7px;border:1.5px solid var(--line2);background:var(--surf);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.8rem;padding:0;flex:0 0 auto}
+.move.done .tick{background:var(--pos);border-color:var(--pos);color:#04140F}
+.move .what{font-weight:700;letter-spacing:-.01em}
+.move .why{font-size:.79rem;color:var(--mut);margin-top:.15rem}
+.move .amt{font-family:"JetBrains Mono",monospace;font-weight:800;font-size:1.05rem;white-space:nowrap;text-align:right}
+.move.cash{border-left:3px solid var(--cash)} .move.bank{border-left:3px solid var(--accent)}
+.move.save{border-left:3px solid var(--pos)} .move.qb{border-left:3px solid var(--warn)}
+.grouplbl{font-family:"JetBrains Mono",monospace;font-size:.6rem;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--mut);margin:1rem 0 .45rem}
+.grouplbl:first-child{margin-top:0}
+.checks{display:grid;gap:.3rem}
+.chk{display:flex;gap:.55rem;align-items:flex-start;font-size:.85rem;padding:.32rem .5rem;border-radius:8px;background:var(--surf2)}
+.chk .ic{flex:0 0 auto;font-family:"JetBrains Mono",monospace;font-weight:700;font-size:.68rem;padding:.1rem .35rem;border-radius:4px}
+.chk.ok .ic{background:var(--pos-soft);color:var(--pos)}
+.chk.no .ic{background:var(--neg-soft);color:var(--neg)}
+.chk.wa .ic{background:var(--warn-soft);color:var(--warn)}
+.qb{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:.6rem}
+.qbcard{background:var(--surf2);border:1px solid var(--line);border-radius:12px;padding:.8rem .9rem}
+.qbcard .nm{font-weight:800;letter-spacing:-.02em;margin-bottom:.4rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.qbrow{display:flex;justify-content:space-between;gap:.8rem;font-size:.83rem;padding:.14rem 0}
+.qbrow span:last-child{font-family:"JetBrains Mono",monospace}
+.qbrow.tot{border-top:1px solid var(--line2);margin-top:.28rem;padding-top:.32rem;font-weight:800}
+.spendrow{display:grid;grid-template-columns:1fr 7.5rem 4.5rem;gap:.5rem;align-items:center;margin-bottom:.35rem}
+.spendrow .track{grid-column:1/-1;background:var(--surf3);border-radius:4px;height:6px;overflow:hidden;margin-top:-.15rem}
+.spendrow .fill{height:100%;background:var(--accent);border-radius:4px}
+.spendrow input{text-align:right;font-family:"JetBrains Mono",monospace}
+.spendrow .pc{font-family:"JetBrains Mono",monospace;font-size:.76rem;color:var(--mut);text-align:right}
+svg.chart{display:block;width:100%;height:auto;min-width:520px}
+.chartwrap{overflow-x:auto}
+.grid line{stroke:var(--line)} .axis text{fill:var(--mut);font-size:10px;font-family:"JetBrains Mono",monospace}
+.zero{stroke:var(--line2);stroke-width:1.5}
+.tip{position:fixed;z-index:80;pointer-events:none;background:var(--surf3);color:var(--ink);border:1px solid var(--line2);
+  border-radius:9px;padding:.45rem .6rem;font-size:.78rem;box-shadow:var(--shadow);opacity:0;transition:opacity .1s}
+.tip b{font-family:"JetBrains Mono",monospace}
+.toast{position:fixed;left:50%;bottom:5.2rem;transform:translateX(-50%);background:var(--surf3);color:var(--ink);
+  border:1px solid var(--line2);border-radius:10px;padding:.55rem .9rem;font-size:.85rem;box-shadow:var(--shadow);
+  opacity:0;transition:opacity .2s;z-index:90;pointer-events:none;max-width:92vw}
+@media(min-width:900px){ .toast{bottom:1.5rem} }
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="app">
+  <nav class="side" aria-label="Sections">
+    <div class="brand"><span class="dot"></span><span><b>Matrix Ledger</b><span>Finance</span></span></div>
+    <button class="nav" data-v="period" aria-current="true"><i>◧</i>Period</button>
+    <button class="nav" data-v="moves"><i>⇄</i>Money moves</button>
+    <button class="nav" data-v="payroll"><i>◉</i>Payroll</button>
+    <button class="nav" data-v="jobs"><i>▤</i>Jobs</button>
+    <button class="nav" data-v="spend"><i>◈</i>Spend</button>
+    <button class="nav" data-v="year"><i>◪</i>Year</button>
+    <button class="nav" data-v="setup"><i>⚙</i>Setup</button>
+    <span class="spacer"></span>
+    <div class="syncbox" id="syncbox"></div>
+  </nav>
+  <main>
+    <div class="top">
+      <h1 id="viewTitle">Pay period<small id="viewSub"></small></h1>
+      <select id="periodSel" aria-label="Pay period"></select>
+      <button class="sm" id="btnToday">Today</button>
+    </div>
+    <section class="view" id="v-period"></section>
+    <section class="view" id="v-moves" hidden></section>
+    <section class="view" id="v-payroll" hidden></section>
+    <section class="view" id="v-jobs" hidden></section>
+    <section class="view" id="v-spend" hidden></section>
+    <section class="view" id="v-year" hidden></section>
+    <section class="view" id="v-setup" hidden></section>
+  </main>
+</div>
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const r2=n=>Math.round(n*100)/100;
+const money=n=>(n<0?"-":"")+"$"+Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const money0=n=>(n<0?"-":"")+"$"+Math.abs(Math.round(n)).toLocaleString("en-US");
+const pct=n=>isFinite(n)?(n*100).toFixed(1)+"%":"—";
+const uid=()=>Math.random().toString(36).slice(2,10);
+const num=v=>{const n=parseFloat(String(v==null?"":v).replace(/[$,\s]/g,""));return isFinite(n)?n:0;};
+
+const DAY=86400000, ANCHOR=Date.UTC(2025,11,29);
+const MN=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const PERIODS=(()=>{const o=[];for(let i=0;i<27;i++){const s=ANCHOR+i*14*DAY,e=s+13*DAY;
+  const sd=new Date(s),ed=new Date(e);
+  o.push({id:"PP"+String(i+1).padStart(2,"0"),start:s,end:e,
+    short:MN[sd.getUTCMonth()]+" "+sd.getUTCDate()+" – "+MN[ed.getUTCMonth()]+" "+ed.getUTCDate(),
+    label:"PP"+String(i+1).padStart(2,"0")+"  "+MN[sd.getUTCMonth()]+" "+sd.getUTCDate()+"–"+MN[ed.getUTCMonth()]+" "+ed.getUTCDate()});}
+  return o;})();
+const toUTC=iso=>{const p=String(iso).split("-").map(Number);return Date.UTC(p[0],(p[1]||1)-1,p[2]||1);};
+const periodOf=iso=>{const t=toUTC(iso);return PERIODS.find(p=>t>=p.start&&t<=p.end)||null;};
+const fmtD=iso=>{const p=String(iso).split("-");return (+p[1])+"/"+(+p[2]);};
+const todayISO=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");};
+/* Every pay period from the ORIGINAL "Matrix Finances" workbook, read straight
+ * out of it on 24 Aug 2026. These are the real figures Habib has been running on:
+ * gross, net, the expense block, the credit-card categories, and what each person
+ * was actually paid. Periods you have not logged jobs into fall back to these. */
+const HISTORY={"PP01":{"tab":"Jan-Mar9","gross":1736,"net":0,"totalExp":0,"ks":0,"exp":{},"card":{},"pay":[],"dist":[],"jobCount":0},
+"PP06":{"tab":"Mar9-Mar22","gross":2715,"net":865.93,"totalExp":1849.07,"ks":0,"exp":{"Accountant":0,"Ads":287,"Credit card":305,"Payroll":1222,"Payroll tax":35.07},"card":{"Chemicals":0,"Equipment":235,"Food":0,"Gas":70,"Merch":0,"Other":0,"Transit equipment":0,"Van":0},"pay":[["Habib",567,125,692],["Ryan",0,0,0],["Mikey",197.5,75,272.5],["Shawn",57.5,0,57.5],["Lilly",150,50,200]],"dist":[],"jobCount":6},
+"PP07":{"tab":"Mar23-Apr5","gross":7673,"net":1727.35,"totalExp":5945.65,"ks":0,"exp":{"Accountant":50,"Ads":251,"Credit card":838.41,"Owner work pay":2400.5,"Payroll":1908.25,"Payroll tax":497.49},"card":{"Chemicals":195.48,"Equipment":377.01,"Food":0,"Gas":265.92,"Merch":0,"Other":0,"Transit equipment":0,"Van":0},"pay":[["Habib",297.5,0,297.5],["Ryan",1736,367,2103],["Mikey",1236.25,377,1613.25],["Gannon",185,110,295],["Other",0,0,0]],"dist":[],"jobCount":19},
+"PP08":{"tab":"Apr6-Apr19","gross":1826,"net":-210.22,"totalExp":2036.22,"ks":0,"exp":{"Accountant":0,"Ads":197.13,"Credit card":611.23,"Owner work pay":652.75,"Payroll":486.25,"Payroll tax":88.86},"card":{"Chemicals":0,"Equipment":449.56,"Food":0,"Gas":131.34,"Merch":13.12,"Other":0,"Transit equipment":0,"Van":17.21},"pay":[["Habib",477.75,70,547.75],["Ryan",105,0,105],["Mikey",291.25,33,324.25],["Gannon",125,37,162],["Other",0,0,0]],"dist":[],"jobCount":4},
+"PP09":{"tab":"Apr20-May3","gross":7323,"net":1274.63,"totalExp":6048.37,"ks":885,"exp":{"Accountant":60,"Ads":402.68,"Credit card":304.09,"KS Tax (Savings)":88.5,"Owner work pay":2115.75,"Payroll":2427.25,"Payroll tax":650.1},"card":{"Chemicals":0,"Equipment":17.21,"Food":0,"Gas":231.38,"Insurance":55.5,"Merch":0,"Other":0,"Transit equipment":0,"Van":0},"pay":[["Habib",815.5,166,981.5],["Ryan",1086.75,47.5,1134.25],["Mikey",1041.75,204,1245.75],["Gannon",962.5,219,1181.5],["Other",0,0,0]],"dist":[],"jobCount":19},
+"PP10":{"tab":"May4-May17","gross":8442,"net":424.76,"totalExp":8017.24,"ks":350,"exp":{"Accountant":0,"Credit card":2168,"Owner work pay":4246.25,"Payroll":1292.25,"Payroll tax":310.74},"card":{"Chemicals":898,"Equipment":63,"Food":0,"Gas":296,"LSA Ads":646,"Merch":0,"Other":0,"Transit equipment":0,"Van":265},"pay":[["Habib",1898.75,175.5,2074.25],["Ryan",1963.5,208.5,2172],["Mikey",356.25,22.5,378.75],["Gannon",745,168.5,913.5],["Other",0,0,0]],"dist":[],"jobCount":20},
+"PP11":{"tab":"May18-May31","gross":6288,"net":1042.79,"totalExp":5245.21,"ks":710,"exp":{"Accountant":0,"Credit card":1005.79,"Owner work pay":1961.5,"Payroll":1824.5,"Payroll tax":453.42},"card":{"Chemicals":191,"Equipment":88.15,"Food":0,"Gas":188.16,"LSA ads":382.68,"Merch":0,"Other":20,"Transit equipment":0,"Van":155.8},"pay":[["Habib",1251.25,287,1538.25],["Ryan",383.25,40,423.25],["Mikey",1135,182,1317],["Gannon",445,62.5,507.5],["Other",0,0,0]],"dist":[],"jobCount":16},
+"PP12":{"tab":"June1-June14","gross":6362,"net":-1347.32,"totalExp":7709.32,"ks":237,"exp":{"Credit card":3074.92,"Owner work pay":2226,"Payroll":1780.25,"Payroll tax":429.2,"Tax Savings":198.95},"card":{"Accountant":60,"Food":0,"GHL":20.16,"Gas":183.11,"LSA ads":245.85,"Merch":0,"Other":0,"Supplies":122.77,"Van":2363.71,"Van Insurance":99.48},"pay":[["Habib",962.5,95,1057.5],["Ryan",1053.5,115,1168.5],["Mikey",825,170,995],["Gannon",650,135,785],["Other",0.25,0,0.25]],"dist":[["Distributions:",0],["Habib",-235.781],["Ryan",-235.781],["Savings/Tax",-336.83],["Checkings",-538.928]],"jobCount":13},
+"PP13":{"tab":"June15-June28","gross":6629,"net":-975.09,"totalExp":7604.09,"ks":383,"exp":{"Credit card":3397.6,"Owner work pay":1457.9,"Payroll":2454.25,"Payroll tax":256.04,"Tax Savings":38.3},"card":{"Accountant":0,"Ads":441.62,"Food":27.88,"GHL":33.03,"Gas":197.44,"Merch":0,"Other":20,"Supplies":2584.55,"Van":146.11,"Van Insurance":0},"pay":[["Habib",628.95,100,728.95],["Ryan",628.95,100,728.95],["Mikey",1055,172,1227],["Gannon",1055,172,1227],["Other",0.25,0,0.25]],"dist":[["Distributions:",0],["Habib",-170.64075],["Ryan",-170.64075],["Savings/Tax",-243.7725],["Checkings",-390.036]],"jobCount":19},
+"PP14":{"tab":"June29-July12","gross":4302,"net":-258.92,"totalExp":4560.92,"ks":360,"exp":{"Credit card":1902.95,"Owner work pay":180,"Payroll":2221.75,"Payroll tax":220.22,"Tax Savings":36},"card":{"Accountant":60,"Food":0,"GHL":42.45,"Gas":143.04,"LSA ads":343.91,"Merch":0,"Other":18.5,"Supplies":197.42,"Van":1068.27,"Van Insurance":90.31},"pay":[["Habib",70,20,90],["Ryan",70,20,90],["Mikey",1236.25,267,1503.25],["Gannon",581.25,137,718.25],["Other",0.25,0,0.25]],"dist":[["Distributions:",0],["Habib",-45.311],["Ryan",-45.311],["Savings/Tax",-64.73],["Checkings",-103.568]],"jobCount":12},
+"PP15":{"tab":"July12-July26","gross":5526,"net":-2417.2,"totalExp":7943.2,"ks":498,"exp":{"Credit card":4470.38,"Owner work pay":779,"Payroll":2369.25,"Payroll tax":220.02,"Tax Savings":104.55},"card":{"Accountant":0,"Food":19.69,"GHL":32.04,"Gas":259.22,"LSA ads":1017.58,"Merch":0,"Other":1020,"Supplies":1982.83,"Van":139.02,"Van Insurance":0},"pay":[["Habib",504,-55,449],["Ryan",385,-55,330],["Mikey",805,237,1042],["Gannon",1040,287,1327],["Other",0.25,0,0.25]],"dist":[["Distributions:",0],["Habib",-423.01],["Ryan",-423.01],["Savings/Tax",-604.3],["Checkings",-966.88]],"jobCount":18},
+"PP16":{"tab":"July27-Aug9","gross":11269,"net":873.175000000001,"totalExp":10395.825,"ks":635,"exp":{"Credit card":2791.75,"Owner work pay":2577,"Payroll":4223.535,"Payroll tax":380.79,"Tax Savings":422.75},"card":{"Accountant":60,"Food":69.16,"GHL":31.87,"Gas":213.53,"Insurance":112.97,"Merch":0,"Other":468,"Supplies":1256.3,"Van":0,"ads":1079.79},"pay":[["Habib",1298.5,226,1524.5],["Ryan",1085,-32.5,1052.5],["Mikey",1705,267.66,1972.66],["Gannon",1553.75,250.5,1804.25],["Christian",227.25,12.5,239.75],["Hayden",174.375,32.5,206.875]],"dist":[["Distributions:",0],["Habib",152.805625],["Ryan",152.805625],["Savings/Tax",218.29375],["Checkings",349.27]],"jobCount":31},
+"PP17":{"tab":"Aug10-Aug23","gross":10774,"net":4513.95,"totalExp":6260.05,"ks":1428,"exp":{"Credit card":0,"Owner work pay":2130.8,"Payroll":3881.25,"Payroll tax":0,"Tax Savings":248},"card":{"0.0":0},"pay":[["1065.39999999999",0,0,1065.4],["1065.39999999999",0,0,1065.4],["1663.75",321,68,2052.75],["606.375",140,0,746.375],["901.125",181,0,1082.125],["0.0",0,0,0]],"dist":[["0.175",0],["0.25",0],["0.4",0]],"jobCount":28},
+"PP18":{"tab":"Aug24-Sep6","gross":0,"net":-50,"totalExp":50,"ks":0,"exp":{"Credit card":0,"Owner work pay":0,"Payroll":50,"Payroll tax":0,"Tax Savings":0},"card":{"0.0":0},"pay":[["0.0",0,0,0],["0.0",0,0,0],["0.0",0,50,50],["0.0",0,0,0],["0.0",0,0,0],["0.0",0,0,0]],"dist":[["0.175",0],["0.25",0],["0.4",0]],"jobCount":0}};
+const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]));
+
+/* ---------------- state ---------------- */
+function blank(){return{
+  v:7, savedAt:0,
+  settings:{
+    rates:{owner:.35,team:.25,junior:.225,solo:.40,tax:.0765,minWage:13.75},
+    dist:{Habib:.175,Ryan:.175,"Savings / Tax":.25,Checking:.40},
+    reserve:{incomeTax:.20, ksSalesTax:.10, taxBase:"transfer"},  // transfer | draws
+    /* A name stays on this list forever once somebody has worked a job under it.
+       This list is ALSO the commission-rate lookup, so deleting a leaver silently
+       recalculates every past period they worked at 0%. Use active:false instead —
+       it hides them from the job pickers but keeps their rate intact. */
+    techs:[{name:"Habib",role:"Owner",active:true},{name:"Ryan",role:"Owner",active:true},
+           {name:"Mikey",role:"Team Lead",active:true},{name:"Gannon",role:"Team Lead",active:true},
+           {name:"Christian",role:"Technician",active:true},
+           {name:"Hayden",role:"Technician",active:false}],
+    services:["Basic","Standard","Premium","Deluxe","Exterior Only","Ceramic Coating","Add-on","Cancellation Fee","Other"],
+    methods:["Card (MO)","Card (KS)","Cash","Venmo","Check","Zelle","Other"],
+    cashMethods:["Cash"],
+    ksMethods:["Card (KS)"],
+    spendCats:["Gas","Supplies","Van","Merch","Food","Ads","Accountant","Insurance","GHL","Other"]
+  },
+  jobs:[], spend:{}, moves:{}, submitted:{}, extras:{}
+};}
+const KEY="matrix-ledger-v3";
+let S=blank(), cloud=null, cloudAt=0, localAt=0;
+try{const raw=localStorage.getItem(KEY); if(raw){const o=JSON.parse(raw); if(o&&o.settings) S=o;}}catch(e){}
+/* v4: income-tax reserve is a % of the bank transfer only, not of cash paid to owners */
+try{ if((S.v||0)<4){ S.settings.reserve=S.settings.reserve||{incomeTax:.20,ksSalesTax:.10};
+  S.settings.reserve.taxBase="transfer"; S.v=4; } }catch(e){}
+/* v5: bonuses / reimbursements / deductions */
+try{ if((S.v||0)<5){ S.extras=S.extras||{}; S.v=5; } }catch(e){}
+/* v6: a crew member who leaves is deactivated, never deleted. v5 deleted Hayden,
+   which zeroed his commission on every period he had already worked. */
+try{ if((S.v||0)<6){
+  var T=S.settings.techs||(S.settings.techs=[]);
+  T.forEach(function(t){ if(t.active===undefined) t.active=true; });
+  if(!T.some(function(t){return t.name==="Hayden";})) T.push({name:"Hayden",role:"Technician",active:false});
+  S.v=6; } }catch(e){}
+/* v7: role labels renamed. Tech -> Team Lead (25%), Junior -> Technician (22.5%).
+   Rates and rate keys are untouched, so nobody's pay changes by a cent. */
+try{ if((S.v||0)<7){
+  (S.settings.techs||[]).forEach(function(t){
+    if(t.role==="Tech") t.role="Team Lead";
+    else if(t.role==="Junior") t.role="Technician"; });
+  S.v=7; } }catch(e){}
+if(!S.extras) S.extras={};
+/* migrate a v2 save if one exists and v3 is empty */
+try{ if(!S.jobs.length){ const old=localStorage.getItem("matrix-ledger-v2");
+  if(old){ const o=JSON.parse(old); if(o&&o.jobs&&o.jobs.length){ S.jobs=o.jobs; if(o.settings&&o.settings.techs) S.settings.techs=o.settings.techs; } } } }catch(e){}
+
+let saveT=null;
+function save(){ S.savedAt=Date.now(); clearTimeout(saveT);
+  saveT=setTimeout(()=>{ try{ localStorage.setItem(KEY,JSON.stringify(S)); localAt=Date.now(); paintSync(); }
+    catch(e){ toast("Could not save locally — storage may be full."); }
+    /* The device copy is the one that must never fail, so it is written first and
+       the cloud push is fired after it — a dead network can't cost you an entry. */
+    cloudPush(); },200); }
+function paintSync(){ const el=$("#syncbox"); if(!el) return;
+  const t=ms=>ms? new Date(ms).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):"never";
+  el.innerHTML="device &nbsp;"+t(localAt)+"<br>cloud &nbsp;&nbsp;"+((cloud||supa)?t(cloudAt):"n/a"); }
+let toastT=null;
+function toast(m){const el=$("#toast");el.textContent=m;el.style.opacity="1";clearTimeout(toastT);toastT=setTimeout(()=>el.style.opacity="0",2600);}
+
+/* Two-click confirmation. window.confirm/prompt/alert are BLOCKED in the
+   artifact sandbox — they return false/null without ever showing anything, so
+   any "if(!confirm(...)) return" silently does nothing at all. First click arms
+   the control and shows what it is about to do; a second click within 4 seconds
+   goes through. Clicking anywhere else, or waiting, cancels. */
+function arm(el, done){
+  if(!el) return;
+  const label=el.textContent, cls=el.className;
+  let armed=false, t=null;
+  const reset=()=>{armed=false;clearTimeout(t);el.textContent=label;el.className=cls;};
+  el.addEventListener("click",e=>{
+    e.stopPropagation();
+    if(armed){ reset(); done(); return; }
+    armed=true; el.textContent="Click again to confirm"; el.className=cls+" danger";
+    t=setTimeout(reset,4000);
+    document.addEventListener("click",function once(){document.removeEventListener("click",once);reset();},{once:true});
+  });
+}
+/* ============================================================
+   CLOUD SYNC — Supabase row 'ledger'
+   The ledger is the system of record. The Command Center only ever READS
+   what this pushes, so the money math lives in exactly one place: if the
+   Finance page re-derived it, the first rate change would make two screens
+   disagree and both would look right.
+   Same project and table the Command Center already syncs tasks and goals
+   through, so there is one place to look when something stops arriving.
+   Conflict rule: last write wins on savedAt, and a device only ADOPTS a row
+   that is strictly newer than what it already holds — a stale tab left open
+   overnight cannot overwrite the day's work.
+   ============================================================ */
+const SUPA_URL="https://errcepsgqvdzdmzckfbd.supabase.co";
+const SUPA_KEY="sb_publishable_IdqYlW-JnuMJptfrZMHGEA_oXhmC1D5";  /* publishable (anon) key — browser-safe under RLS */
+const SUPA_TABLE="matrix", SUPA_ROW="ledger";
+const supa=(window.supabase&&window.supabase.createClient)
+  ? window.supabase.createClient(SUPA_URL,SUPA_KEY) : null;
+let pushT=null, pushBusy=false, lastPushedAt=0;
+
+const isoOf=ms=>new Date(ms).toISOString().slice(0,10);
+
+/* The finished numbers, computed here and shipped ready to render.
+   Mirrors the Year view exactly: a period reads LIVE the moment anything is
+   logged into it, and falls back to what the original workbook recorded until
+   then, so the year is whole from January rather than from the day this app
+   started. */
+function ledgerSummary(){
+  const rows=PERIODS.map(p=>{
+    const t=totals(p.id), P=plan(p.id), h=HISTORY[p.id];
+    const live=t.jobs>0||t.opex>0;
+    /* The old book's "Total Expenses" bundles payroll, payroll tax and owner pay
+       in with everything else. The ledger keeps labor and spend apart, so strip
+       the labor back out — otherwise labor gets counted twice in the year. */
+    const hLab=h?r2(((h.exp&&h.exp["Payroll"])||0)+((h.exp&&h.exp["Payroll tax"])||0)+((h.exp&&h.exp["Owner work pay"])||0)):0;
+    return {id:p.id, label:p.label, short:p.short, start:isoOf(p.start), end:isoOf(p.end),
+      live, basis:live?"ledger":"old book",
+      revenue:live?t.revenue:(h?h.gross:0),
+      opex:live?t.opex:(h?r2(Math.max(0,h.totalExp-hLab)):0),
+      net:live?t.net:(h?h.net:0),
+      labor:live?t.labor:hLab,
+      ownerPay:live?P.ownerPay:(h?r2((h.exp&&h.exp["Owner work pay"])||0):0),
+      jobs:live?t.jobs:(h?h.jobCount:0),
+      ksSales:live?t.ksSales:(h?h.ks:0),
+      tips:live?t.tips:0, cashIn:live?t.cashIn:0, hours:live?t.hours:0,
+      toSavings:live?P.toSavings:0};
+  }).filter(r=>r.live||HISTORY[r.id]);
+
+  const add=(rs,k)=>r2(rs.reduce((a,r)=>a+r[k],0));
+  const roll=rs=>({periods:rs.length, revenue:add(rs,"revenue"), labor:add(rs,"labor"),
+    opex:add(rs,"opex"), net:add(rs,"net"), jobs:rs.reduce((a,r)=>a+r.jobs,0)});
+  const liveRows=rows.filter(r=>r.live), oldRows=rows.filter(r=>!r.live);
+  const y=roll(rows);
+  const year=Object.assign(y,{
+    tips:add(rows,"tips"), cashIn:add(rows,"cashIn"), ksSales:add(rows,"ksSales"),
+    ownerPay:add(rows,"ownerPay"), hours:add(rows,"hours"), toSavings:add(rows,"toSavings"),
+    laborPct:y.revenue?y.labor/y.revenue:null, netPct:y.revenue?y.net/y.revenue:null,
+    /* The two sources do not measure the same thing — old-book revenue includes
+       tips and Kansas sales tax, ledger revenue excludes both. Ship the split so
+       the Finance page can say so instead of printing one dishonest total. */
+    mixed:liveRows.length>0&&oldRows.length>0, ledger:roll(liveRows), oldBook:roll(oldRows)});
+  const cur=periodOf(todayISO());
+  return {v:1, builtAt:Date.now(), savedAt:S.savedAt||0, currentPeriod:cur?cur.id:null,
+    year, periods:rows, monthly:monthlySeries(rows)};
+}
+
+/* Months are exact where the ledger holds job dates, and prorated by day across
+   the pay period where the old book is the only source. */
+function monthlySeries(rows){
+  /* PP01 opens on 29 Dec 2025 but the book it came from calls that January, and
+     so does the Year view. Fold those three days forward rather than putting a
+     stray "Dec" bar in front of a 2026 chart. */
+  const m={}, addM=(k,v)=>{ if(k<"2026-01") k="2026-01"; m[k]=(m[k]||0)+v; };
+  const liveIds={}; rows.forEach(r=>{ if(r.live) liveIds[r.id]=1; });
+  S.jobs.forEach(j=>{ if(j.status!=="Completed") return;
+    const p=periodOf(j.date); if(!p||!liveIds[p.id]) return;
+    addM(String(j.date).slice(0,7), num(j.price)); });
+  rows.filter(r=>!r.live&&r.revenue).forEach(r=>{
+    const s=toUTC(r.start), e=toUTC(r.end), days=Math.max(1,Math.round((e-s)/DAY)+1);
+    for(let i=0;i<days;i++) addM(new Date(s+i*DAY).toISOString().slice(0,7), r.revenue/days); });
+  return Object.keys(m).sort().map(k=>({monthKey:k, month:MN[+k.slice(5,7)-1], revenue:Math.round(m[k])}));
+}
+
+async function cloudPull(){
+  if(!supa) return;
+  try{
+    const {data,error}=await supa.from(SUPA_TABLE).select("data,updated_at").eq("id",SUPA_ROW).maybeSingle();
+    if(error){ syncErr(error); return; }
+    if(!data) return;                    /* nothing up there yet — first run */
+    cloudAt=Date.parse(data.updated_at)||Date.now(); paintSync();
+    adopt(data.data);
+  }catch(e){ syncErr(e); }
+}
+function adopt(d){
+  const st=d&&d.state;
+  if(!st||!st.settings||!Array.isArray(st.jobs)) return;
+  if(!(st.savedAt>(S.savedAt||0))) return;      /* ours is the same or newer — keep it */
+  S=st; if(!S.extras) S.extras={};
+  lastPushedAt=S.savedAt;                        /* don't bounce it straight back */
+  try{ localStorage.setItem(KEY,JSON.stringify(S)); localAt=Date.now(); }catch(e){}
+  renderAll();
+  toast("Pulled a newer copy from the cloud.");
+}
+function cloudWatch(){
+  if(!supa) return;
+  supa.channel("matrix-ledger")
+    .on("postgres_changes",{event:"*",schema:"public",table:SUPA_TABLE,filter:"id=eq."+SUPA_ROW},
+      pl=>{ if(pl&&pl.new){ cloudAt=Date.parse(pl.new.updated_at)||Date.now(); paintSync(); adopt(pl.new.data); } })
+    .subscribe();
+  addEventListener("focus",()=>{ cloudPull(); });
+}
+/* Debounced: a burst of edits is one write, not fifteen. */
+function cloudPush(opt){
+  if(!supa) return;
+  clearTimeout(pushT);
+  pushT=setTimeout(()=>doPush(!!(opt&&opt.force)),900);
+}
+async function doPush(force){
+  if(!supa||pushBusy) return;
+  if(!force&&S.savedAt===lastPushedAt) return;
+  pushBusy=true;
+  try{
+    const updated_at=new Date().toISOString();
+    const {error}=await supa.from(SUPA_TABLE).upsert({
+      id:SUPA_ROW,
+      data:{savedAt:S.savedAt||0, state:S, summary:ledgerSummary()},
+      updated_at});
+    if(error) syncErr(error);
+    else{ lastPushedAt=S.savedAt; cloudAt=Date.now(); paintSync();
+      if(force) toast("Synced. The Command Center has these numbers."); }
+  }catch(e){ syncErr(e); }
+  pushBusy=false;
+}
+/* A refused write is invisible from the driver's seat — the number just never
+   turns up on the other screen. Say what happened and what fixes it. */
+function syncErr(e){
+  const m=(e&&e.message)||"";
+  if(/row-level security|permission|policy|violates/i.test(m))
+    toast("Supabase refused the write — the 'matrix' table needs an insert/update policy.");
+  else if(/fetch|network|Failed/i.test(m))
+    toast("No connection to the cloud. The device copy is saved.");
+  else toast("Cloud sync error: "+(m||"unknown"));
+}
+/* "Cloud" means Supabase when this runs on the Command Center's domain, and the
+   artifact's own file store when it runs inside claude.ai. Both are tried, so the
+   same file works in either place and the sync box always says which one answered. */
+(async()=>{
+  try{ cloud=window.claude&&claude.use? await claude.use("artifact"):null; }catch(e){cloud=null;}
+  if(cloud){
+    try{ const r=await fetch("data/ledger.json",{cache:"no-store"});
+      if(r.ok){const o=await r.json(); if(o&&o.settings&&(!S.savedAt||o.savedAt>S.savedAt)){S=o;renderAll();toast("Loaded the cloud copy — it was newer.");}} }catch(e){}
+  }
+  await cloudPull();
+  cloudWatch();
+  /* Push once on open when this device holds the newest copy, so the Finance
+     page is current even on a day nothing gets edited. */
+  if(S.jobs.length||Object.keys(S.spend||{}).length) cloudPush();
+  paintSync(); })();
+async function cloudSave(){
+  if(supa){ await doPush(true); return; }
+  if(!cloud||!cloud.publish){ toast("Cloud backup unavailable here. Use Download backup."); return; }
+  try{ await cloud.publish({"data/ledger.json":JSON.stringify(S)}); cloudAt=Date.now(); paintSync(); toast("Backed up to the cloud."); }
+  catch(e){ toast("Cloud backup failed"+(e&&e.code?" ("+e.code+")":"")+". Device copy is still saved."); }
+}
+
+/* ---------------- derivation ---------------- */
+/* Roles map to a rate KEY, not to a rate. The keys never change, so renaming a
+   role is a label change only. Both the old names ("Tech", "Junior") and the new
+   ones resolve — an unrecognised role would silently pay 0%, which is exactly
+   how a deleted crew member once zeroed a whole pay period. */
+const ROLES=["Owner","Team Lead","Technician"];
+const ROLE_RATE={Owner:"owner","Team Lead":"team",Technician:"junior",
+                 Tech:"team",Junior:"junior"};          // legacy names, keep forever
+const techRole=n=>{const t=S.settings.techs.find(x=>x.name===n);return t?t.role:null;};
+const isOwner=n=>techRole(n)==="Owner";
+const baseRate=n=>{const r=S.settings.rates,ro=techRole(n);
+  var k=ROLE_RATE[ro]; return k?r[k]:0;};
+function lines(j){
+  const techs=(j.techs||[]).filter(Boolean), crew=techs.length; if(!crew) return [];
+  const solo=crew===1, done=j.status==="Completed";
+  return techs.map((name,i)=>{
+    const rate=solo?S.settings.rates.solo:baseRate(name);
+    return {job:j,name,crew,solo,rate,comm:done?r2(num(j.price)*rate):0,
+      tip:r2(num(j.tip)/crew), tipCash:!!j.tipCash,
+      adj:(j.adj&&j.adj[i])||0, hours:num(j.hours)};
+  });
+}
+const jobsIn=p=>S.jobs.filter(j=>{const x=periodOf(j.date);return x&&x.id===p;});
+const spendOf=p=>S.spend[p]||{};
+const spendTotal=p=>{const s=spendOf(p);return r2(Object.keys(s).reduce((a,k)=>a+num(s[k]),0));};
+
+/* Bonuses, reimbursements and deductions — the three things that are NOT
+   commission but still change what somebody gets paid. They are kept apart
+   because the tax treatment differs:
+     Bonus         taxable wages. Goes in the QuickBooks gross, employer tax applies.
+     Reimbursement NOT wages. He spent his own money on the business and is being
+                   paid back, so no payroll tax — and it is a business expense.
+     Deduction     reduces taxable wages (a tool he broke, training time, etc).
+   The original workbook hid all three inside the tip columns, which overstated
+   tips and understated wages. */
+const EXTRA_TYPES=["Bonus","Reimbursement","Deduction"];
+const extrasIn=p=>(S.extras&&S.extras[p])||[];
+function extrasBy(p){
+  const by={};
+  extrasIn(p).forEach(e=>{
+    const r=by[e.name]||(by[e.name]={bonus:0,reimb:0,deduct:0,items:[]});
+    const a=num(e.amount);
+    if(e.type==="Reimbursement") r.reimb+=a;
+    else if(e.type==="Deduction") r.deduct+=a;
+    else r.bonus+=a;
+    r.items.push(e);
+  });
+  return by;
+}
+function extraSplit(p){
+  const by=extrasBy(p);
+  const o={empBonus:0,empReimb:0,empDeduct:0,ownBonus:0,ownReimb:0,ownDeduct:0};
+  Object.keys(by).forEach(n=>{const e=by[n];
+    if(isOwner(n)){o.ownBonus+=e.bonus;o.ownReimb+=e.reimb;o.ownDeduct+=e.deduct;}
+    else {o.empBonus+=e.bonus;o.empReimb+=e.reimb;o.empDeduct+=e.deduct;}});
+  Object.keys(o).forEach(k=>o[k]=r2(o[k]));
+  return o;
+}
+
+function totals(p){
+  const js=jobsIn(p), done=js.filter(j=>j.status==="Completed");
+  const revenue=r2(done.reduce((a,j)=>a+num(j.price),0));
+  const tips=r2(done.reduce((a,j)=>a+num(j.tip),0));
+  let ownerComm=0, empComm=0, tipOut=0, adj=0, hours=0;
+  js.forEach(j=>lines(j).forEach(l=>{
+    if(isOwner(l.name)) ownerComm+=l.comm; else empComm+=l.comm;
+    tipOut+=l.tip; adj+=l.adj; hours+=l.hours; }));
+  /* A tip marked "cash tip split" was handed over and divided on the spot. The
+     crew already have it, and the business never held it. It must NOT ride into
+     the QuickBooks gross or they get paid the same tip twice. */
+  const empTips=r2(js.reduce((a,j)=>a+lines(j).filter(l=>!isOwner(l.name)).reduce((b,l)=>b+l.tip,0),0));
+  const empTipsCash=r2(js.reduce((a,j)=>a+lines(j).filter(l=>!isOwner(l.name)&&l.tipCash).reduce((b,l)=>b+l.tip,0),0));
+  const empTipsPay=r2(empTips-empTipsCash);
+  const tipsCash=r2(js.reduce((a,j)=>a+lines(j).filter(l=>l.tipCash).reduce((b,l)=>b+l.tip,0),0));
+  const empAdj=r2(js.reduce((a,j)=>a+lines(j).filter(l=>!isOwner(l.name)).reduce((b,l)=>b+l.adj,0),0));
+  const ownerTips=r2(tipOut-empTips), ownerAdj=r2(adj-empAdj);
+  const X=extraSplit(p);
+  // Gross wages = what goes on the QuickBooks pay run (tips and bonuses in,
+  // reimbursements OUT — a reimbursement is not earnings and is not taxed).
+  const empWages=r2(empComm+empTipsPay+empAdj+X.empBonus-X.empDeduct);
+  const empTax=r2(empWages*S.settings.rates.tax);
+  // COST to the business excludes tips: they arrive from the customer and leave
+  // to the crew, and they were never counted in revenue, so they must not be
+  // subtracted from it either. Owners are a draw, so no employer tax on them.
+  const empCost=r2(empComm+empAdj+X.empBonus-X.empDeduct+empTax);
+  const ownerCost=r2(ownerComm+ownerAdj+X.ownBonus-X.ownDeduct);
+  // Money the crew laid out for the business and is getting back. Not labor —
+  // it is the underlying expense, so it sits on its own line.
+  const reimb=r2(X.empReimb+X.ownReimb);
+  const opex=spendTotal(p);
+  const net=r2(revenue-ownerCost-empCost-opex-reimb);
+  /* Cash in hand, available to pay owners. A tip the crew split themselves never
+     reached the till, so it is not yours to hand out. */
+  const cashIn=r2(done.filter(j=>S.settings.cashMethods.indexOf(j.payment)>-1)
+    .reduce((a,j)=>a+num(j.price)+(j.tipCash?0:num(j.tip)),0));
+  const ksSales=r2(done.filter(j=>S.settings.ksMethods.indexOf(j.payment)>-1).reduce((a,j)=>a+num(j.price),0));
+  const labor=r2(ownerCost+empCost);
+  return {revenue,tips,ownerComm:r2(ownerComm),empComm:r2(empComm),empTips,empAdj,ownerTips,ownerAdj,
+    empWages,empTax,empCost,ownerCost,reimb,x:X,
+    tipsCash,empTipsCash,empTipsPay,
+    tipOut:r2(tipOut),adj:r2(adj),hours:r2(hours),opex,net,cashIn,ksSales,labor,
+    jobs:done.length, solo:done.filter(j=>(j.techs||[]).filter(Boolean).length===1).length,
+    avg:done.length?revenue/done.length:0,
+    laborPct:revenue?labor/revenue:NaN, netPct:revenue?net/revenue:NaN};
+}
+function payroll(p){
+  const by={}, EX=extrasBy(p);
+  const blankRow=n=>({name:n,role:techRole(n)||"—",jobs:0,rev:0,comm:0,tip:0,tipCash:0,adj:0,hours:0,solo:0,
+                      bonus:0,reimb:0,deduct:0,items:[]});
+  jobsIn(p).forEach(j=>lines(j).forEach(l=>{
+    const r=by[l.name]||(by[l.name]=blankRow(l.name));
+    r.jobs++;r.rev+=num(l.job.price);r.comm+=l.comm;r.tip+=l.tip;
+    if(l.tipCash) r.tipCash+=l.tip;
+    r.adj+=l.adj;r.hours+=l.hours;if(l.solo)r.solo++;}));
+  // Somebody can have a bonus or a reimbursement in a period they worked no jobs.
+  Object.keys(EX).forEach(n=>{
+    const r=by[n]||(by[n]=blankRow(n));
+    r.bonus=r2(EX[n].bonus); r.reimb=r2(EX[n].reimb); r.deduct=r2(EX[n].deduct); r.items=EX[n].items;});
+  return Object.values(by).map(r=>{
+    r.comm=r2(r.comm);r.tip=r2(r.tip);r.tipCash=r2(r.tipCash);r.adj=r2(r.adj);r.hours=r2(r.hours);
+    // Tips they already pocketed in cash on the job. Owed to them: nothing more.
+    r.tipPay=r2(r.tip-r.tipCash);
+    // GROSS is what goes on the QuickBooks pay run — cash-split tips are NOT in it,
+    // because they were handed over on the driveway.
+    r.gross=r2(r.comm+r.tipPay+r.adj+r.bonus-r.deduct);
+    // TAKE-HOME adds the reimbursement back — paid, but never taxed.
+    r.payout=r2(r.gross+r.reimb);
+    // EARNED is everything they actually made, cash tips included. The wage floor
+    // is tested against this, not against the pay run — a cash tip is still earnings.
+    r.earned=r2(r.comm+r.tip+r.adj+r.bonus-r.deduct);
+    r.rate=r.hours?r.earned/r.hours:NaN;
+    r.under=r.hours>0&&r.rate<S.settings.rates.minWage;
+    r.topup=r.under?r2(S.settings.rates.minWage*r.hours-r.earned):0;
+    r.owner=isOwner(r.name);
+    return r;}).sort((a,b)=>(a.owner===b.owner)?b.gross-a.gross:(a.owner?-1:1));
+}
+
+/* THE MONEY PLAN — cash first to owners, then what to move and why */
+function plan(p){
+  const t=totals(p), pr=payroll(p), rs=S.settings.reserve;
+  const owners=pr.filter(r=>r.owner);
+  const ownerPay=r2(owners.reduce((a,r)=>a+r.gross,0));
+  const cashToOwners=r2(Math.min(t.cashIn, ownerPay));
+  // split the available cash between owners in proportion to what each earned
+  const share=owners.map(r=>({name:r.name, earned:r.gross,
+    cash:ownerPay? r2(cashToOwners*(r.gross/ownerPay)) : 0}));
+  share.forEach(s=>s.transfer=r2(s.earned-s.cash));
+  const ownerTransfer=r2(Math.max(0, ownerPay-cashToOwners));
+  const cashLeft=r2(Math.max(0, t.cashIn-cashToOwners));
+  const taxBaseAmt = rs.taxBase==="transfer" ? ownerTransfer : ownerPay;
+  const incomeTaxSave=r2(taxBaseAmt*rs.incomeTax);
+  const ksSave=r2(t.ksSales*rs.ksSalesTax);
+  const qbRun=r2(t.empWages);
+  const qbCost=r2(t.empWages+t.empTax);
+  const distr=Object.keys(S.settings.dist).map(k=>({k,pctv:S.settings.dist[k],amt:r2(t.net*S.settings.dist[k])}));
+  return {t,pr,owners,ownerPay,cashToOwners,share,ownerTransfer,cashLeft,
+    incomeTaxSave,ksSave,taxBaseAmt,qbRun,qbCost,distr,
+    toSavings:r2(incomeTaxSave+ksSave)};
+}
+
+/* ---------------- ui ---------------- */
+let CUR=(periodOf(todayISO())||PERIODS[15]).id, VIEW="period";
+const TITLES={period:"Pay period",moves:"Money moves",payroll:"Payroll",jobs:"Jobs",spend:"Spend",year:"Year",setup:"Setup"};
+function fillPeriods(){
+  $("#periodSel").innerHTML=PERIODS.map(p=>{const t=totals(p.id);
+    return `<option value="${p.id}"${p.id===CUR?" selected":""}>${esc(p.label)}${(t.jobs||t.opex)?"":"  ·  empty"}</option>`;}).join("");
+}
+$("#periodSel").addEventListener("change",e=>{CUR=e.target.value;renderAll();});
+$("#btnToday").addEventListener("click",()=>{const p=periodOf(todayISO());
+  if(p){CUR=p.id;fillPeriods();renderAll();toast("Jumped to "+p.label);}else toast("Today is outside the calendar.");});
+$$(".nav").forEach(b=>b.addEventListener("click",()=>{
+  VIEW=b.dataset.v; $$(".nav").forEach(x=>x.setAttribute("aria-current",String(x===b)));
+  $$(".view").forEach(v=>v.hidden=v.id!=="v-"+VIEW);
+  $("#viewTitle").firstChild.textContent=TITLES[VIEW]; renderAll(); scrollTo(0,0);}));
+const kpi=(k,v,s,c)=>`<div class="kpi ${c||""}"><span class="k">${esc(k)}</span><span class="v">${v}</span>${s?`<span class="s">${esc(s)}</span>`:""}</div>`;
+const opts=(a,sel)=>a.map(v=>`<option${v===sel?" selected":""}>${esc(v)}</option>`).join("");
+
+/* ---- PERIOD ---- */
+function renderPeriod(){
+  const P=plan(CUR), t=P.t, p=PERIODS.find(x=>x.id===CUR);
+  $("#viewSub").textContent=p.short+(S.submitted[CUR]?"  ·  payroll submitted":"");
+  $("#v-period").innerHTML=`
+    <div class="hero"><span class="lbl">Net income · ${esc(p.short)}</span>
+      <div class="big ${t.net<0?"neg":"pos"}">${money0(t.net)}</div>
+      <div class="strip"><span>margin <b>${pct(t.netPct)}</b></span>
+        <span>revenue <b>${money0(t.revenue)}</b></span>
+        <span>labor <b>${money0(t.labor)}</b> (${pct(t.laborPct)})</span>
+        <span>spend <b>${money0(t.opex)}</b></span>
+        ${t.jobs?`<span>${t.jobs} jobs · ${t.solo} solo</span>`:""}</div></div>
+    <div class="kpis">
+      ${kpi("Job revenue",money0(t.revenue),"tips excluded")}
+      ${kpi("Cash collected",money0(t.cashIn),"available for owner pay","cash")}
+      ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
+      ${kpi("Employee wages",money0(t.empWages),"through QuickBooks")}
+      ${kpi("To savings",money0(P.toSavings),"tax reserve","pos")}
+      ${kpi("Labor % of revenue",pct(t.laborPct),"target under 50%",t.laborPct>0.55?"neg":t.laborPct>0.5?"warn":"pos")}
+    </div>
+    <div class="two">
+      <div class="card"><h2>Before you run payroll</h2>
+        <p class="sub">Everything that should be true for ${esc(p.short)}.</p>
+        <div class="checks">${readiness(P)}</div>
+        <div class="bar"><button class="pri" id="goMoves">Money moves →</button>
+          <button id="markSub">${S.submitted[CUR]?"Mark not submitted":"Mark payroll submitted"}</button></div></div>
+      <div class="card"><h2>Distribution of net</h2>
+        <p class="sub">What is left after labor and spend, split your way.</p>
+        ${P.distr.map(d=>`<div class="qbrow"><span>${esc(d.k)} <span class="hint">${pct(d.pctv)}</span></span><span>${money(d.amt)}</span></div>`).join("")}
+        <div class="qbrow tot"><span>Net income</span><span>${money(t.net)}</span></div>
+        <p class="hint" style="margin-top:.6rem">Distributions come out of profit — they are not a cost, and they sit on top of the owner work pay above.</p></div>
+    </div>`;
+  $("#goMoves").addEventListener("click",()=>$$(".nav").find(b=>b.dataset.v==="moves").click());
+  $("#markSub").addEventListener("click",()=>{S.submitted[CUR]=!S.submitted[CUR];save();renderAll();});
+}
+function readiness(P){
+  const t=P.t, js=jobsIn(CUR);
+  const noTech=js.filter(j=>j.status==="Completed"&&!(j.techs||[]).filter(Boolean).length&&j.service!=="Cancellation Fee").length;
+  const noHours=js.filter(j=>j.status==="Completed"&&!num(j.hours)&&(j.techs||[]).filter(Boolean).length).length;
+  const unknown=[...new Set(js.flatMap(j=>(j.techs||[]).filter(Boolean)))].filter(n=>!techRole(n));
+  const flags=P.pr.filter(r=>r.under&&!r.owner);
+  const rows=[
+    [js.length>0,"Jobs are in for this period","No jobs yet — bring them over from the Work Log."],
+    [noTech===0,"Every completed job has a tech",noTech+" job(s) have nobody to pay."],
+    [noHours===0,"Every job has hours",noHours+" job(s) missing hours — the wage floor can't be checked."],
+    [unknown.length===0,"All techs are known","Not in your crew list: "+unknown.join(", ")+"."],
+    [flags.length===0,"No employee under minimum wage",flags.map(f=>f.name+" needs "+money(f.topup)).join("; ")+"."],
+    [t.opex>0,"Spend entered for this period","No spend yet — net income will read high."]
+  ];
+  return rows.map(([ok,g,b])=>{
+    const soft=!ok&&(g.indexOf("Spend")===0);
+    return `<div class="chk ${ok?"ok":(soft?"wa":"no")}"><span class="ic">${ok?"OK":(soft?"?":"!")}</span><span>${ok?esc(g):esc(b)}</span></div>`;}).join("");
+}
+
+/* ---- MONEY MOVES ---- */
+function renderMoves(){
+  const P=plan(CUR), t=P.t, p=PERIODS.find(x=>x.id===CUR), rs=S.settings.reserve;
+  $("#viewSub").textContent=p.short+" · what to move and why";
+  const done=S.moves[CUR]||{};
+  const mv=(id,cls,what,why,amt)=>`<div class="move ${cls}${done[id]?" done":""}">
+      <button class="tick" data-mv="${id}" aria-label="Mark done">${done[id]?"✓":""}</button>
+      <div><div class="what">${what}</div><div class="why">${why}</div></div>
+      <div class="amt">${money(amt)}</div></div>`;
+  const cashRows=P.share.filter(s=>s.cash>0.004)
+    .map(s=>mv("cash-"+s.name,"cash","Hand "+esc(s.name)+" "+money(s.cash)+" in cash",
+      "Part of the "+money(s.earned)+" they earned working jobs. Paying it from cash on hand means no bank transfer for this part.",s.cash)).join("");
+  const transferRows=P.share.filter(s=>s.transfer>0.004)
+    .map(s=>mv("xfer-"+s.name,"bank","Transfer to "+esc(s.name),
+      "The rest of their "+money(s.earned)+" work pay, after the cash above.",s.transfer)).join("");
+  $("#v-moves").innerHTML=`
+    <div class="kpis">
+      ${kpi("Cash collected",money0(t.cashIn),"this period","cash")}
+      ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
+      ${kpi("Covered by cash",money0(P.cashToOwners),P.ownerPay?pct(P.cashToOwners/P.ownerPay)+" of owner pay":"","cash")}
+      ${kpi("Bank transfer needed",money0(P.ownerTransfer),P.ownerTransfer?"after cash":"cash covered it all",P.ownerTransfer?"warn":"pos")}
+      ${kpi("Kansas sales",money0(t.ksSales),pct(rs.ksSalesTax)+" goes to savings")}
+      ${kpi("Total to savings",money0(P.toSavings),"income + sales tax","pos")}
+    </div>
+    <div class="card">
+      <h2>Do these, in this order</h2>
+      <p class="sub">Tick them off as you go. This resets per pay period.</p>
+      ${cashRows?`<div class="grouplbl">1 · Pay owners from cash first</div>${cashRows}`:""}
+      ${P.cashLeft>0.004?mv("deposit","cash","Deposit the remaining cash",
+        "Cash left after paying owners. Put it in the business account so the books match the bank.",P.cashLeft):""}
+      ${!cashRows&&P.cashLeft<=0.004?`<p class="hint">No cash collected this period — everything goes by transfer.</p>`:""}
+      ${transferRows?`<div class="grouplbl">2 · Bank transfers for the rest of owner pay</div>${transferRows}`:
+        `<div class="grouplbl">2 · Bank transfers</div><p class="hint">None needed — cash covered all of the owner work pay.</p>`}
+      <div class="grouplbl">3 · Move to savings</div>
+      ${mv("save-income","save","Business → Savings, income tax",
+        pct(rs.incomeTax)+" of the "+money(P.taxBaseAmt)+" "+(rs.taxBase==="transfer"?"transferred to owners for work pay":"in total owner work pay")+". Owner pay has no tax withheld at source, so this is your own withholding.",P.incomeTaxSave)}
+      ${mv("save-ks","save","Business → Savings, Kansas sales tax",
+        pct(rs.ksSalesTax)+" of "+money(t.ksSales)+" in Kansas sales. Kansas charges sales tax; this is set aside to remit it.",P.ksSave)}
+      <div class="grouplbl">4 · QuickBooks</div>
+      ${mv("qb-run","qb","Run direct deposit for the crew",
+        "Gross wages for the employees. Employer tax of "+money(t.empTax)+" comes on top, so make sure "+money(P.qbCost)+" is in the account.",P.qbRun)}
+      <div class="bar"><button class="sm" id="resetMoves">Reset ticks</button>
+        <button class="sm" id="copyMoves">Copy this plan</button></div>
+    </div>
+    <div class="card"><h2>Where the money ended up</h2>
+      <div class="scroll"><table><tbody>
+        <tr><td>Job revenue</td><td class="n">${money(t.revenue)}</td></tr>
+        <tr><td>— Owner work pay (commission)</td><td class="n">${money(-t.ownerCost)}</td></tr>
+        <tr><td>— Employee commission${t.empAdj?" and adjustments":""}</td><td class="n">${money(-r2(t.empComm+t.empAdj))}</td></tr>
+        <tr><td>— Employer payroll tax</td><td class="n">${money(-t.empTax)}</td></tr>
+        ${t.reimb?`<tr><td>— Reimbursed to the crew <span class="hint">their money back, not wages</span></td><td class="n">${money(-t.reimb)}</td></tr>`:""}
+        <tr><td>— Spend</td><td class="n">${money(-t.opex)}</td></tr>
+        </tbody><tfoot><tr><td>Net income</td><td class="n">${money(t.net)}</td></tr></tfoot></table></div>
+      <p class="hint" style="margin-top:.6rem">Tips (${money(t.tips)}) are in from the customer and straight back out to the crew,
+        so they never enter revenue and are never a cost. They do still show in the gross pay you enter in QuickBooks,
+        and employer tax is charged on them.</p></div>`;
+  $$("[data-mv]").forEach(b=>b.addEventListener("click",()=>{
+    const m=S.moves[CUR]||(S.moves[CUR]={}); m[b.dataset.mv]=!m[b.dataset.mv]; save(); renderMoves();}));
+  $("#resetMoves").addEventListener("click",()=>{S.moves[CUR]={};save();renderMoves();});
+  $("#copyMoves").addEventListener("click",()=>{
+    const L=[p.label+" — money moves",""];
+    P.share.forEach(s=>{ if(s.cash>0.004) L.push("Cash to "+s.name+": "+money(s.cash)); });
+    if(P.cashLeft>0.004) L.push("Deposit remaining cash: "+money(P.cashLeft));
+    P.share.forEach(s=>{ if(s.transfer>0.004) L.push("Transfer to "+s.name+": "+money(s.transfer)); });
+    L.push("Savings — income tax: "+money(P.incomeTaxSave));
+    L.push("Savings — Kansas sales tax: "+money(P.ksSave));
+    L.push("QuickBooks direct deposit: "+money(P.qbRun)+"  (fund "+money(P.qbCost)+")");
+    navigator.clipboard&&navigator.clipboard.writeText(L.join("\n")).then(()=>toast("Plan copied."),()=>toast("Copy blocked."));
+  });
+}
+
+/* ---- PAYROLL ---- */
+function renderPayroll(){
+  const P=plan(CUR), t=P.t, p=PERIODS.find(x=>x.id===CUR), mw=S.settings.rates.minWage;
+  const emp=P.pr.filter(r=>!r.owner), own=P.pr.filter(r=>r.owner);
+  $("#viewSub").textContent=p.short;
+  const card=r=>`<div class="qbcard"><div class="nm">${esc(r.name)}
+      <span class="pill mut">${esc(r.role)}</span>${r.solo?`<span class="pill solo">${r.solo} solo</span>`:""}
+      ${r.under?`<span class="pill neg">under floor</span>`:""}</div>
+    <div class="qbrow"><span>Commission</span><span>${money(r.comm)}</span></div>
+    <div class="qbrow"><span>Tips ${r.tipCash?'<span class="hint">through payroll</span>':""}</span><span>${money(r.tipPay)}</span></div>
+    ${r.tipCash?`<div class="qbrow" style="color:var(--cash)">
+      <span>Cash tips <span class="pill cash">already taken</span></span><span>${money(r.tipCash)}</span></div>`:""}
+    ${r.adj?`<div class="qbrow"><span>Job adjustments</span><span>${money(r.adj)}</span></div>`:""}
+    ${r.bonus?`<div class="qbrow"><span>Bonus <span class="pill warn">taxed</span></span><span>${money(r.bonus)}</span></div>`:""}
+    ${r.deduct?`<div class="qbrow"><span>Deduction</span><span>${money(-r.deduct)}</span></div>`:""}
+    <div class="qbrow tot"><span>GROSS <span class="hint">taxable</span></span><span>${money(r.gross)}</span></div>
+    ${r.reimb?`<div class="qbrow"><span>Reimbursement <span class="pill pos">not taxed</span></span><span>${money(r.reimb)}</span></div>
+    <div class="qbrow tot"><span>TAKE HOME</span><span>${money(r.payout)}</span></div>`:""}
+    <div class="qbrow"><span>Hours</span><span>${r.hours||"—"}</span></div>
+    <div class="qbrow"><span>Per hour</span><span>${isFinite(r.rate)?money(r.rate):"—"}</span></div>
+    ${r.under?`<div class="qbrow" style="color:var(--neg)"><span>Top-up to ${money(mw)}</span><span>${money(r.topup)}</span></div>`:""}
+    ${r.items.length?`<div class="qbrow" style="display:block;color:var(--mut);font-size:.76rem;padding-top:.3rem">
+      ${r.items.map(it=>esc(it.type)+": "+esc(it.note||"no reason given")).join("<br>")}</div>`:""}</div>`;
+  $("#v-payroll").innerHTML=`
+    <div class="card"><h2>QuickBooks direct deposit — employees</h2>
+      <p class="sub">Type these gross amounts into the QuickBooks pay run for ${esc(p.short)}. Nothing here needs recalculating there.</p>
+      ${emp.length?`<div class="qb">${emp.map(card).join("")}</div>
+      <div class="bar"><button class="pri" id="copyQB">Copy for QuickBooks</button>
+        <span class="hint">Gross <b class="mono">${money(t.empWages)}</b> + employer tax <b class="mono">${money(t.empTax)}</b>
+        = fund <b class="mono">${money(P.qbCost)}</b></span></div>`:`<div class="empty">No employee work in this period.</div>`}
+    </div>
+    <div class="card"><h2>Owner work pay — not payroll</h2>
+      <p class="sub">Habib and Ryan take this as an owner draw, paid from cash first then by transfer. See Money moves.</p>
+      ${own.length?`<div class="qb">${own.map(card).join("")}</div>`:`<div class="empty">No owner work this period.</div>`}
+    </div>
+    <div class="card"><h2>Bonuses &amp; reimbursements</h2>
+      <p class="sub">Anything that changes someone's pay but is not commission. The type matters —
+        a <b>bonus</b> is taxable earnings and rides in the QuickBooks gross; a <b>reimbursement</b> is
+        his own money coming back, so it is never taxed and books as a business expense instead.</p>
+      ${extrasIn(CUR).length?`<div class="scroll"><table>
+        <thead><tr><th>Person</th><th>Type</th><th>Reason</th><th class="n">Amount</th><th></th></tr></thead>
+        <tbody>${extrasIn(CUR).map(e=>`<tr>
+          <td><b>${esc(e.name)}</b></td>
+          <td><span class="pill ${e.type==="Reimbursement"?"pos":e.type==="Deduction"?"neg":"warn"}">${esc(e.type)}</span></td>
+          <td>${esc(e.note||"—")}</td>
+          <td class="n">${money(num(e.amount))}</td>
+          <td class="n"><button class="sm danger" data-delx="${e.id}">remove</button></td></tr>`).join("")}
+        </tbody></table></div>`:`<div class="empty">Nothing this period.</div>`}
+      <div class="grid" style="margin-top:.7rem">
+        <div class="f"><label>Person</label><select id="xName">${opts(S.settings.techs.map(t=>t.name))}</select></div>
+        <div class="f"><label>Type</label><select id="xType">${opts(EXTRA_TYPES)}</select></div>
+        <div class="f"><label>Amount</label><input id="xAmt" type="number" step="0.01" placeholder="0.00"></div>
+        <div class="f"><label>Reason</label><input id="xNote" placeholder="e.g. bought pads at O'Reilly"></div>
+      </div>
+      <div class="bar"><button class="pri" id="addX">Add</button>
+        <span class="hint">Bonus <b class="mono">${money(t.x.empBonus+t.x.ownBonus)}</b> ·
+          Reimbursed <b class="mono">${money(t.reimb)}</b> ·
+          Deducted <b class="mono">${money(t.x.empDeduct+t.x.ownDeduct)}</b></span></div>
+    </div>
+    <div class="card"><h2>Everyone, in detail</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Person</th><th>Type</th><th class="n">Jobs</th><th class="n">Solo</th><th class="n">Revenue worked</th>
+          <th class="n">Commission</th><th class="n">Tips<br><span class="hint">payroll</span></th><th class="n">Cash tips<br><span class="hint">already taken</span></th><th class="n">Adj</th><th class="n">Bonus</th>
+          <th class="n">Gross</th><th class="n">Reimb</th><th class="n">Take home</th>
+          <th class="n">Hours</th><th class="n">$/hr</th></tr></thead>
+        <tbody>${P.pr.map(r=>`<tr><td><b>${esc(r.name)}</b></td>
+          <td>${r.owner?'<span class="pill mut">draw</span>':'<span class="pill mut">W-2</span>'}</td>
+          <td class="n">${r.jobs}</td><td class="n">${r.solo||"—"}</td><td class="n">${money0(r.rev)}</td>
+          <td class="n">${money(r.comm)}</td><td class="n">${money(r.tipPay)}</td><td class="n" style="color:var(--cash)">${r.tipCash?money(r.tipCash):"—"}</td><td class="n">${r.adj?money(r.adj):"—"}</td>
+          <td class="n">${r.bonus?money(r.bonus):"—"}</td>
+          <td class="n"><b>${money(r.gross)}</b></td><td class="n">${r.reimb?money(r.reimb):"—"}</td>
+          <td class="n"><b>${money(r.payout)}</b></td><td class="n">${r.hours||"—"}</td>
+          <td class="n">${isFinite(r.rate)?money(r.rate):"—"}</td></tr>`).join("")}</tbody></table></div></div>`;
+  $("#addX").addEventListener("click",()=>{
+    const amt=num($("#xAmt").value);
+    if(!amt){ toast("Put an amount in first."); return; }
+    (S.extras[CUR]||(S.extras[CUR]=[])).push({id:uid(),name:$("#xName").value,type:$("#xType").value,
+      amount:r2(Math.abs(amt)),note:$("#xNote").value.trim()});
+    save(); renderAll(); toast("Added.");});
+  $$("[data-delx]").forEach(b=>b.addEventListener("click",()=>{
+    S.extras[CUR]=(S.extras[CUR]||[]).filter(e=>e.id!==b.dataset.delx); save(); renderAll();}));
+  const c=$("#copyQB");
+  if(c) c.addEventListener("click",()=>{
+    const txt=[p.label+" — QuickBooks direct deposit",""]
+      .concat(emp.map(r=>r.name+"   gross "+money(r.gross)+"   hours "+(r.hours||0)+
+        (r.tipCash?"   [excludes "+money(r.tipCash)+" of cash tips already split on the job]":"")+
+        (r.reimb?"   + reimbursement "+money(r.reimb)+" (non-taxable, enter as a reimbursement line)":"")))
+      .concat(["","Total gross "+money(t.empWages),"Employer tax "+money(t.empTax),
+               "Reimbursements "+money(t.x.empReimb)+" (not wages)","Fund "+money(P.qbCost)]).join("\n");
+    navigator.clipboard&&navigator.clipboard.writeText(txt).then(()=>toast("Copied."),()=>toast("Copy blocked."));});
+}
+
+/* ---- JOBS ---- */
+function renderJobs(){
+  const p=PERIODS.find(x=>x.id===CUR); $("#viewSub").textContent=p.short;
+  const s=S.settings, tn=s.techs.filter(t=>t.active!==false).map(t=>t.name);
+  const js=jobsIn(CUR).slice().sort((a,b)=>a.date.localeCompare(b.date));
+  $("#v-jobs").innerHTML=`
+    <div class="card"><h2>Bring jobs over from the Work Log</h2>
+      <p class="sub">Select the rows in the Work Log <b>including the header row</b>, copy, paste here. Columns are matched by name, so order doesn't matter.</p>
+      <textarea id="paste" rows="4" placeholder="Paste Work Log rows here…" style="width:100%"></textarea>
+      <div class="bar"><button class="pri" id="doImport">Preview import</button>
+        <span class="hint">Takes <b>JOB REVENUE</b> if present, else Package + Upcharge + Upsells — never the ticket total, so tips stay out of commission.</span></div>
+      <div id="importPreview"></div></div>
+    <div class="card"><h2>Add one by hand</h2>
+      <div class="grid">
+        <div class="f"><label>Date</label><input id="jd" type="date" value="${esc(todayISO())}"></div>
+        <div class="f"><label>Customer</label><input id="jc" placeholder="name"></div>
+        <div class="f"><label>Service</label><select id="jsv">${opts(s.services,"Standard")}</select></div>
+        <div class="f"><label>Price (no tip)</label><input id="jp" type="number" min="0" step="1"></div>
+        <div class="f"><label>Tip</label><input id="jt" type="number" min="0" step="1"></div>
+        <div class="f"><label>Cash tip, split on the job?</label>
+          <label style="display:flex;gap:.4rem;align-items:center;font-size:.85rem;padding:.3rem 0">
+            <input type="checkbox" id="jtc"> already handed over</label></div>
+        <div class="f"><label>Payment</label><select id="jm">${opts(s.methods,"Card (MO)")}</select></div>
+        <div class="f"><label>Tech 1</label><select id="j1"><option value=""></option>${opts(tn)}</select></div>
+        <div class="f"><label>Tech 2</label><select id="j2"><option value=""></option>${opts(tn)}</select></div>
+        <div class="f"><label>Tech 3</label><select id="j3"><option value=""></option>${opts(tn)}</select></div>
+        <div class="f"><label>Hours each</label><input id="jh" type="number" min="0" step="0.5"></div>
+      </div>
+      <div class="bar"><button class="pri" id="addJob">Add job</button><span class="hint" id="prev"></span></div></div>
+    <div class="card"><h2>${js.length} job${js.length===1?"":"s"} this period</h2>
+      <div class="scroll">${js.length?`<table>
+        <thead><tr><th>Date</th><th>Customer</th><th>Service</th><th class="n">Price</th><th class="n">Tip</th>
+          <th>Pay</th><th>Crew</th><th class="n">Rate</th><th class="n">Labor</th><th class="n">Hrs</th><th></th></tr></thead>
+        <tbody>${js.map(j=>{const ls=lines(j),lab=ls.reduce((a,l)=>a+l.comm+l.adj,0);
+          return `<tr><td>${fmtD(j.date)}</td><td>${esc(j.customer)}</td><td>${esc(j.service)}</td>
+          <td class="n">${money0(j.price)}</td><td class="n">${num(j.tip)?money0(j.tip):"—"}</td>
+          <td>${S.settings.cashMethods.indexOf(j.payment)>-1?'<span class="pill cash">cash</span>':
+                S.settings.ksMethods.indexOf(j.payment)>-1?'<span class="pill warn">KS</span>':esc(j.payment)}</td>
+          <td>${ls.length?ls.map(l=>esc(l.name)).join(" + "):'<span class="pill mut">none</span>'}${ls.length===1?' <span class="pill solo">solo</span>':""}</td>
+          <td class="n">${ls.length?[...new Set(ls.map(l=>pct(l.rate)))].join("/"):"—"}</td>
+          <td class="n">${money0(lab)}</td><td class="n">${num(j.hours)||"—"}</td>
+          <td><button class="sm danger" data-del="${j.id}">×</button></td></tr>`;}).join("")}</tbody></table>`
+        :`<div class="empty">No jobs in this period.</div>`}</div></div>`;
+  ["jp","j1","j2","j3"].forEach(id=>$("#"+id).addEventListener("input",prevCalc)); prevCalc();
+  $("#addJob").addEventListener("click",()=>{
+    const d=$("#jd").value; if(!d) return toast("A job needs a date.");
+    S.jobs.push({id:uid(),date:d,customer:$("#jc").value||"—",service:$("#jsv").value,price:num($("#jp").value),
+      tip:num($("#jt").value),tipCash:!!($("#jtc")&&$("#jtc").checked),
+      payment:$("#jm").value,status:"Completed",
+      techs:[$("#j1").value,$("#j2").value,$("#j3").value].filter(Boolean),adj:[0,0,0],hours:num($("#jh").value),notes:""});
+    const pp=periodOf(d); if(pp) CUR=pp.id; save(); fillPeriods(); renderAll(); toast("Job added.");});
+  $("#doImport").addEventListener("click",previewImport);
+  $$("[data-del]").forEach(b=>b.addEventListener("click",()=>{
+    S.jobs=S.jobs.filter(j=>j.id!==b.dataset.del); save(); renderAll();}));
+}
+function prevCalc(){
+  const price=num($("#jp").value), techs=[$("#j1").value,$("#j2").value,$("#j3").value].filter(Boolean), el=$("#prev");
+  if(!el) return;
+  if(!techs.length){el.textContent="No tech yet — nobody gets paid for this job.";return;}
+  const solo=techs.length===1;
+  const parts=techs.map(n=>n+" "+pct(solo?S.settings.rates.solo:baseRate(n))+" = "+money(r2(price*(solo?S.settings.rates.solo:baseRate(n)))));
+  const tot=techs.reduce((a,n)=>a+(solo?S.settings.rates.solo:baseRate(n)),0);
+  el.innerHTML=(solo?'<span class="pill solo">solo</span> ':"")+esc(parts.join("  ·  "))+"  ·  labor "+pct(tot);
+}
+function splitRows(txt){const rows=[];let row=[],cell="",q=false;
+  for(let i=0;i<txt.length;i++){const c=txt[i];
+    if(q){if(c==='"'){if(txt[i+1]==='"'){cell+='"';i++;}else q=false;}else cell+=c;}
+    else{if(c==='"')q=true;else if(c==="\t"||c===","){row.push(cell);cell="";}
+      else if(c==="\n"){row.push(cell);rows.push(row);row=[];cell="";}else if(c!=="\r")cell+=c;}}
+  row.push(cell);rows.push(row);return rows.filter(r=>r.some(c=>String(c).trim()!==""));}
+const nrm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+const pad=n=>String(n).padStart(2,"0");
+function parseDate(s){s=String(s).trim();
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if(m) return m[1]+"-"+pad(m[2])+"-"+pad(m[3]);
+  m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if(m){let y=+m[3];if(y<100)y+=2000;return y+"-"+pad(m[1])+"-"+pad(m[2]);}
+  const d=new Date(s); if(!isNaN(d)) return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+  return null;}
+let PENDING=null;
+function parseImport(txt){
+  const rows=splitRows(txt); if(rows.length<2) return {err:"Paste the header row plus at least one job."};
+  const head=rows[0].map(nrm);
+  // Exact header match first; then "starts with", so a Work Log header that
+  // spells out its arithmetic — "JOB REVENUE (Package + Upcharge + Upsells)" —
+  // still resolves when pasted straight from the sheet.
+  const find=(...n)=>{for(const x of n){const i=head.indexOf(nrm(x));if(i>-1)return i;}
+    for(const x of n){const t=nrm(x),i=head.findIndex(h=>h.indexOf(t)===0);if(i>-1)return i;}return -1;};
+  const iDate=find("date"); if(iDate<0) return {err:"No Date column found — include the header row."};
+  const iCust=find("client name","customer","client"), iSvc=find("package","service"),
+    iRev=find("job revenue"), iPkg=find("package $","package price"), iUpch=find("condition upcharge","upcharge"),
+    iUps=find("upsell total","upsell $"), iTicket=find("ticket total"), iTip=find("tip"),
+    iPay=find("payment type","payment"), iT1=find("tech 1"), iT2=find("tech 2"), iT3=find("tech 3"),
+    iTipCash=find("cash tip split?","cash tip split","tip split in cash","cash tip"),
+    iHrs=find("hours","hours duration"), iNotes=find("notes");
+  const out=[],warn=[];
+  if(iRev<0&&iPkg<0&&iTicket>-1) warn.push("No JOB REVENUE or Package $ column — using Ticket Total minus Tip.");
+  if(iHrs<0) warn.push("No Hours column — hours will be blank and the wage floor can't be checked.");
+  for(let r=1;r<rows.length;r++){
+    const row=rows[r], raw=String(row[iDate]||"").trim(); if(!raw) continue;
+    const date=parseDate(raw); if(!date){warn.push("Row "+(r+1)+": couldn't read date \""+raw+"\" — skipped.");continue;}
+    const tip=iTip>-1?num(row[iTip]):0;
+    let price;
+    if(iRev>-1) price=num(row[iRev]);
+    else if(iPkg>-1) price=num(row[iPkg])+(iUpch>-1?num(row[iUpch]):0)+(iUps>-1?num(row[iUps]):0);
+    else if(iTicket>-1) price=num(row[iTicket])-tip; else price=0;
+    out.push({id:uid(),date,customer:(iCust>-1?row[iCust]:"")||"—",service:(iSvc>-1?row[iSvc]:"")||"Other",
+      price:r2(price),tip:r2(tip),
+      /* Yes = the crew split that tip in cash on the job. Already paid, keep it out of the pay run. */
+      tipCash:iTipCash>-1 && /^(y|true|1)/i.test(String(row[iTipCash]||"").trim()),
+      payment:(iPay>-1?String(row[iPay]).trim():"")||"Other",status:"Completed",
+      techs:[iT1>-1?row[iT1]:"",iT2>-1?row[iT2]:"",iT3>-1?row[iT3]:""].map(x=>String(x||"").trim()).filter(Boolean),
+      adj:[0,0,0],hours:iHrs>-1?num(row[iHrs]):0,notes:(iNotes>-1?row[iNotes]:"")||""});
+  }
+  return {jobs:out,warn};
+}
+function previewImport(){
+  const res=parseImport($("#paste").value), box=$("#importPreview");
+  if(res.err){box.innerHTML=`<p class="hint" style="color:var(--neg)">${esc(res.err)}</p>`;return;}
+  const known=new Set(S.settings.techs.map(t=>t.name));
+  const seen=new Set(S.jobs.map(j=>j.date+"|"+String(j.customer).toLowerCase()+"|"+r2(num(j.price))));
+  const methods=new Set(S.settings.methods);
+  res.jobs.forEach(j=>{ j._dup=seen.has(j.date+"|"+String(j.customer).toLowerCase()+"|"+r2(num(j.price)));
+    j._unknown=j.techs.filter(t=>!known.has(t)); j._badPay=j.payment&&!methods.has(j.payment);
+    j._period=(periodOf(j.date)||{}).id||null; });
+  PENDING=res.jobs;
+  const dups=res.jobs.filter(j=>j._dup).length, unk=[...new Set(res.jobs.flatMap(j=>j._unknown))];
+  const badPay=[...new Set(res.jobs.filter(j=>j._badPay).map(j=>j.payment))];
+  const noP=res.jobs.filter(j=>!j._period).length;
+  box.innerHTML=`<div class="bar" style="margin-top:.8rem">
+      <span class="pill pos">${res.jobs.length} rows</span>
+      ${dups?`<span class="pill warn">${dups} look like duplicates</span>`:""}
+      ${unk.length?`<span class="pill neg">unknown tech: ${esc(unk.join(", "))}</span>`:""}
+      ${badPay.length?`<span class="pill warn">unknown payment: ${esc(badPay.join(", "))}</span>`:""}
+      ${noP?`<span class="pill neg">${noP} outside the calendar</span>`:""}</div>
+    ${res.warn.length?`<p class="hint">${res.warn.map(esc).join("<br>")}</p>`:""}
+    <div class="scroll" style="margin-top:.5rem;max-height:15rem;overflow-y:auto"><table>
+      <thead><tr><th></th><th>Date</th><th>Customer</th><th class="n">Price</th><th class="n">Tip</th><th>Pay</th><th>Crew</th><th class="n">Hrs</th></tr></thead>
+      <tbody>${res.jobs.map((j,i)=>`<tr><td><input type="checkbox" data-imp="${i}" ${j._dup?"":"checked"}></td>
+        <td>${esc(fmtD(j.date))}</td><td>${esc(j.customer)}</td><td class="n">${money0(j.price)}</td>
+        <td class="n">${j.tip?money0(j.tip):"—"}</td><td>${esc(j.payment)}</td>
+        <td>${esc(j.techs.join(" + "))||"—"}${j._unknown.length?' <span class="pill neg">?</span>':""}</td>
+        <td class="n">${j.hours||"—"}</td></tr>`).join("")}</tbody></table></div>
+    <div class="bar"><button class="pri" id="confirmImport">Import ticked rows</button>
+      <button class="ghost" id="cancelImport">Cancel</button></div>`;
+  $("#confirmImport").addEventListener("click",()=>{
+    const pick=$$("[data-imp]").filter(c=>c.checked).map(c=>PENDING[+c.dataset.imp]);
+    if(!pick.length) return toast("Nothing ticked.");
+    pick.forEach(j=>{delete j._dup;delete j._unknown;delete j._period;delete j._badPay;S.jobs.push(j);});
+    const f=periodOf(pick[0].date); if(f) CUR=f.id;
+    save(); fillPeriods(); renderAll(); toast("Imported "+pick.length+" job"+(pick.length===1?"":"s")+".");});
+  $("#cancelImport").addEventListener("click",()=>{box.innerHTML="";$("#paste").value="";});
+}
+
+/* ---- SPEND (totals per section, no line items) ---- */
+function renderSpend(){
+  const p=PERIODS.find(x=>x.id===CUR), t=totals(CUR), cur=spendOf(CUR);
+  $("#viewSub").textContent=p.short+" · totals only";
+  const cats=S.settings.spendCats, tot=spendTotal(CUR);
+  const max=Math.max(...cats.map(c=>num(cur[c])),1);
+  $("#v-spend").innerHTML=`
+    <div class="kpis">
+      ${kpi("Total spend",money0(tot),p.short)}
+      ${kpi("% of revenue",pct(t.revenue?tot/t.revenue:NaN))}
+      ${kpi("Biggest section",(()=>{const b=cats.slice().sort((a,b2)=>num(cur[b2])-num(cur[a]))[0];return b&&num(cur[b])?esc(b):"—";})(),
+        (()=>{const b=cats.slice().sort((a,b2)=>num(cur[b2])-num(cur[a]))[0];return b&&num(cur[b])?money0(num(cur[b])):"";})())}
+      ${kpi("Net income",money0(t.net),pct(t.netPct)+" margin",t.net<0?"neg":"pos")}
+    </div>
+    <div class="card">
+      <h2>Where every dollar went</h2>
+      <p class="sub">Top to bottom for ${esc(p.short)}. Each line subtracts from the one above it, so the
+        bottom number is what the business actually kept.</p>
+      <div class="scroll"><table>
+        <tbody>
+          <tr><td>Collected from customers <span class="hint">what people actually handed over</span></td>
+              <td class="n">${money(r2(t.revenue+t.tips))}</td><td class="n hint">—</td></tr>
+          <tr><td>— Tips out to the crew <span class="hint">never yours; straight back out</span></td>
+              <td class="n">${money(-t.tips)}</td>
+              <td class="n hint">${t.revenue+t.tips?pct(t.tips/(t.revenue+t.tips)):"—"}</td></tr>
+          <tr style="background:var(--surf3)"><td><b>BUSINESS REVENUE</b> <span class="hint">what the jobs earned — commission is paid on this</span></td>
+              <td class="n"><b>${money(t.revenue)}</b></td><td class="n hint">100%</td></tr>
+
+          <tr><td>— Owner work pay <span class="hint">Habib + Ryan, taken as a draw</span></td>
+              <td class="n">${money(-t.ownerCost)}</td>
+              <td class="n">${t.revenue?pct(t.ownerCost/t.revenue):"—"}</td></tr>
+          <tr><td>— Employee commission${t.x.empBonus?" + bonuses":""}${t.x.empDeduct?" − deductions":""}
+              <span class="hint">the W-2 crew, tips excluded</span></td>
+              <td class="n">${money(-r2(t.empCost-t.empTax))}</td>
+              <td class="n">${t.revenue?pct((t.empCost-t.empTax)/t.revenue):"—"}</td></tr>
+          <tr><td>— Employer payroll tax <span class="hint">${pct(S.settings.rates.tax)} of gross wages, charged on tips too</span></td>
+              <td class="n">${money(-t.empTax)}</td>
+              <td class="n">${t.revenue?pct(t.empTax/t.revenue):"—"}</td></tr>
+          <tr style="border-bottom:1px solid var(--line2)"><td><b>Total labor</b></td>
+              <td class="n"><b>${money(-t.labor)}</b></td>
+              <td class="n" style="color:${t.laborPct>0.55?"var(--neg)":t.laborPct>0.5?"var(--warn)":"var(--pos)"}">
+                <b>${pct(t.laborPct)}</b></td></tr>
+
+          ${t.reimb?`<tr><td>— Reimbursed to the crew <span class="hint">their own money back, not wages</span></td>
+              <td class="n">${money(-t.reimb)}</td>
+              <td class="n">${t.revenue?pct(t.reimb/t.revenue):"—"}</td></tr>`:""}
+          <tr><td>— Spend <span class="hint">the sections below</span></td>
+              <td class="n">${money(-tot)}</td>
+              <td class="n">${t.revenue?pct(tot/t.revenue):"—"}</td></tr>
+        </tbody>
+        <tfoot><tr><td><b>NET INCOME</b></td>
+          <td class="n" style="color:${t.net<0?"var(--neg)":"var(--pos)"}"><b>${money(t.net)}</b></td>
+          <td class="n"><b>${pct(t.netPct)}</b></td></tr></tfoot>
+      </table></div>
+      <p class="hint" style="margin-top:.6rem">Tips appear once as money in and once as money out, so they
+        cancel to zero and never move net income — which is the point. The QuickBooks gross you actually
+        type in is <b class="mono">${money(t.empWages)}</b>, because that one <i>does</i> include tips.</p>
+    </div>
+
+    <div class="card">
+      <h2>What you spent, by section</h2>
+      <p class="sub">One number per section for this pay period — the same shape as the old sheet. Your real transactions live in Chase and QuickBooks; this is just the totals so net income is right.</p>
+      ${cats.map(c=>`<div class="spendrow">
+          <span>${esc(c)}</span>
+          <input type="number" step="0.01" min="0" data-sp="${esc(c)}" value="${cur[c]!=null&&cur[c]!==""?esc(cur[c]):""}" placeholder="0.00">
+          <span class="pc">${tot?((num(cur[c])/tot)*100).toFixed(0)+"%":"—"}</span>
+          <span class="track"><span class="fill" style="width:${Math.max(0,(num(cur[c])/max)*100)}%"></span></span>
+        </div>`).join("")}
+      <div class="bar"><b class="mono">Total ${money(tot)}</b>
+        <button class="sm" id="copyPrev">Copy last period's numbers</button></div>
+    </div>
+    <div class="card"><h2>Sections</h2>
+      <p class="sub">Match these to the categories you already use in QuickBooks so the two agree.</p>
+      <div class="bar"><input id="newCat" placeholder="add a section" style="max-width:12rem">
+        <button class="sm" id="addCat">Add</button>
+        ${cats.map(c=>`<span class="pill mut" style="cursor:pointer" data-rmcat="${esc(c)}" title="remove">${esc(c)} ×</span>`).join(" ")}</div></div>`;
+  $$("[data-sp]").forEach(i=>i.addEventListener("change",()=>{
+    const m=S.spend[CUR]||(S.spend[CUR]={}); const v=i.value.trim();
+    if(v==="") delete m[i.dataset.sp]; else m[i.dataset.sp]=num(v);
+    save(); renderSpend();}));
+  $("#addCat").addEventListener("click",()=>{const v=$("#newCat").value.trim();
+    if(v&&S.settings.spendCats.indexOf(v)<0){S.settings.spendCats.push(v);save();renderSpend();}});
+  $$("[data-rmcat]").forEach(el=>arm(el,()=>{
+    const c=el.dataset.rmcat;
+    S.settings.spendCats=S.settings.spendCats.filter(x=>x!==c);save();renderSpend();
+    toast("Removed \""+c+"\". Anything already entered under it is kept in the data.");}));
+  $("#copyPrev").addEventListener("click",()=>{
+    const i=PERIODS.findIndex(x=>x.id===CUR); if(i<1) return toast("No earlier period.");
+    const prev=S.spend[PERIODS[i-1].id];
+    if(!prev||!Object.keys(prev).length) return toast("Nothing in the previous period.");
+    S.spend[CUR]=Object.assign({},prev); save(); renderSpend(); toast("Copied from "+PERIODS[i-1].id+" — now adjust it.");});
+}
+
+/* ---- YEAR ---- */
+function renderYear(){
+  $("#viewSub").textContent="2026 · year to date";
+  /* A period is shown from LIVE data once anything is logged into it. Until then
+     it falls back to what the original workbook actually recorded, so the year
+     is complete from January rather than starting the day the app did. */
+  const rows=PERIODS.map(p=>{const t=totals(p.id),P=plan(p.id),h=HISTORY[p.id];
+    const live=t.jobs>0||t.opex>0;
+    /* The old book's "Total Expenses" bundles payroll, payroll tax and owner pay
+       in with everything else. The ledger keeps labor and spend apart, so strip
+       the labor back out — otherwise labor gets counted twice in the year strip. */
+    const hLab=h?r2(((h.exp&&h.exp["Payroll"])||0)+((h.exp&&h.exp["Payroll tax"])||0)+((h.exp&&h.exp["Owner work pay"])||0)):0;
+    return {p,...t,ownerPay:P.ownerPay,toSavings:P.toSavings,h,live,
+      xRev:live?t.revenue:(h?h.gross:0),
+      xOpex:live?t.opex:(h?r2(Math.max(0,h.totalExp-hLab)):0),
+      xNet:live?t.net:(h?h.net:0),
+      xKs:live?t.ksSales:(h?h.ks:0),
+      xJobs:live?t.jobs:(h?h.jobCount:0),
+      xOwn:live?P.ownerPay:(h?r2((h.exp&&h.exp["Owner work pay"])||0):0),
+      xLab:live?t.labor:hLab};})
+    .filter(r=>r.live||r.h);
+  const y=rows.reduce((a,r)=>({rev:a.rev+r.xRev,lab:a.lab+r.xLab,op:a.op+r.xOpex,net:a.net+r.xNet,
+    tips:a.tips+r.tips,hrs:a.hrs+r.hours,jobs:a.jobs+r.xJobs,cash:a.cash+r.cashIn,ks:a.ks+r.xKs,
+    sav:a.sav+r.toSavings,own:a.own+r.xOwn}),
+    {rev:0,lab:0,op:0,net:0,tips:0,hrs:0,jobs:0,cash:0,ks:0,sav:0,own:0});
+  Object.keys(y).forEach(k=>y[k]=r2(y[k]));
+  /* The two sources do not measure the same thing: old-book revenue includes
+     tips (and Kansas sales tax), ledger revenue excludes them. Never present the
+     blend as if it were one clean figure — split it and say so. */
+  const liveRows=rows.filter(r=>r.live), oldRows=rows.filter(r=>!r.live);
+  const sub=rs=>rs.reduce((a,r)=>({rev:r2(a.rev+r.xRev),net:r2(a.net+r.xNet),
+    op:r2(a.op+r.xOpex),jobs:a.jobs+r.xJobs}),{rev:0,net:0,op:0,jobs:0});
+  const sLive=sub(liveRows), sOld=sub(oldRows), mixed=liveRows.length&&oldRows.length;
+  $("#v-year").innerHTML=`
+    <div class="hero"><span class="lbl">Year to date · net income</span>
+      <div class="big ${y.net<0?"neg":"pos"}">${money0(y.net)}</div>
+      <div class="strip"><span>revenue <b>${money0(y.rev)}</b></span>
+        <span>labor <b>${money0(y.lab)}</b> (${pct(y.rev?y.lab/y.rev:NaN)})</span>
+        <span>spend <b>${money0(y.op)}</b></span><span>margin <b>${pct(y.rev?y.net/y.rev:NaN)}</b></span>
+        <span><b>${y.jobs}</b> jobs</span></div></div>
+    ${mixed?`<div class="card" style="border-left:3px solid var(--warn)">
+      <h2>This year total mixes two different measures</h2>
+      <p class="sub" style="margin-bottom:.6rem">Read the two halves separately — do not treat the
+        combined figure as one clean number.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Basis</th><th class="n">Periods</th><th class="n">Jobs</th><th class="n">Revenue</th><th class="n">Net</th><th>What revenue means here</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill pos">ledger</span></td><td class="n">${liveRows.length}</td>
+            <td class="n">${sLive.jobs}</td><td class="n">${money0(sLive.rev)}</td><td class="n">${money0(sLive.net)}</td>
+            <td class="hint">Job revenue only. Tips excluded — they are the crew's, not yours.</td></tr>
+          <tr><td><span class="pill mut">old book</span></td><td class="n">${oldRows.length}</td>
+            <td class="n">${sOld.jobs}</td><td class="n">${money0(sOld.rev)}</td><td class="n">${money0(sOld.net)}</td>
+            <td class="hint">Gross <b>including</b> tips, and sales tax on Kansas jobs.</td></tr>
+        </tbody></table></div>
+      <p class="hint" style="margin-top:.6rem">Old-book rows run roughly 6–7% high against ledger rows.
+        Importing a period into the ledger will therefore make the year revenue <b>drop</b> — nothing has
+        been lost, the number just got more honest. When all 14 periods are on the ledger basis this
+        panel disappears and the year total means one thing again.</p></div>`:""}
+    <div class="kpis">
+      ${kpi("Owner work pay",money0(y.own),"Habib + Ryan, YTD")}
+      ${kpi("Cash collected",money0(y.cash),"YTD","cash")}
+      ${kpi("Kansas sales",money0(y.ks),"YTD")}
+      ${kpi("Set aside to savings",money0(y.sav),"income + KS sales tax","pos")}
+      ${kpi("Hours logged",r2(y.hrs)||"—","across the crew")}
+    </div>
+    <div class="card"><h2>Net income by pay period</h2>
+      <p class="sub">Above the line made money. Hover for the breakdown.</p>
+      <div class="chartwrap"><svg class="chart" id="netChart" role="img" aria-label="Net income by pay period"></svg></div>
+      <div class="bar"><span class="hint"><span class="pill pos">profit</span> <span class="pill neg">loss</span></span></div></div>
+    <div class="card"><h2>Every period</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Period</th><th>Source</th><th class="n">Jobs</th><th class="n">Revenue</th><th class="n">Cash</th><th class="n">KS sales</th>
+          <th class="n">Owner pay</th><th class="n">Labor</th><th class="n">Labor %</th><th class="n">Spend</th>
+          <th class="n">Net</th><th class="n">Margin</th><th class="n">Savings</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${esc(r.p.id)} <span class="hint">${esc(r.p.short)}</span></td>
+          <td>${r.live?'<span class="pill pos">ledger</span>':`<span class="pill mut" title="${esc(r.h.tab)}">old book</span>`}</td>
+          <td class="n">${r.xJobs||"—"}</td><td class="n">${r.xRev?money0(r.xRev):"—"}</td>
+          <td class="n">${r.cashIn?money0(r.cashIn):"—"}</td><td class="n">${r.xKs?money0(r.xKs):"—"}</td>
+          <td class="n">${r.xOwn?money0(r.xOwn):"—"}</td><td class="n">${r.xLab?money0(r.xLab):"—"}</td>
+          <td class="n">${r.xRev?pct(r.xLab/r.xRev):"—"}</td><td class="n">${r.xOpex?money0(r.xOpex):"—"}</td>
+          <td class="n" style="color:${r.xRev?(r.xNet<0?"var(--neg)":"var(--pos)"):"inherit"}">${r.xRev?money0(r.xNet):"—"}</td>
+          <td class="n">${r.xRev?pct(r.xNet/r.xRev):"—"}</td><td class="n">${r.toSavings?money0(r.toSavings):"—"}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td>2026 total</td><td></td><td class="n">${y.jobs}</td><td class="n">${money0(y.rev)}</td>
+          <td class="n">${money0(y.cash)}</td><td class="n">${money0(y.ks)}</td><td class="n">${money0(y.own)}</td>
+          <td class="n">${money0(y.lab)}</td><td class="n">${pct(y.rev?y.lab/y.rev:NaN)}</td><td class="n">${money0(y.op)}</td>
+          <td class="n">${money0(y.net)}</td><td class="n">${pct(y.rev?y.net/y.rev:NaN)}</td>
+          <td class="n">${money0(y.sav)}</td></tr></tfoot>
+      </table></div>
+      <p class="hint" style="margin-top:.6rem"><b>old book</b> rows were read straight out of your original
+        "Matrix Finances" workbook on 24 Aug 2026 — real figures, not estimates. A period flips to
+        <b>ledger</b> the moment you log a job or a spend total into it, and then it is computed live.
+        Revenue in the old-book rows is gross <i>including</i> tips, because that is how the original
+        sheet counted it; ledger rows exclude tips. That is the one place the two are not comparing
+        like with like.</p></div>`;
+  drawNet(rows.filter(r=>r.xRev>0||r.xOpex>0).map(r=>({...r,revenue:r.xRev,net:r.xNet,opex:r.xOpex})));
+}
+const tipEl=$("#tip");
+function showTip(h,e){tipEl.innerHTML=h;tipEl.style.opacity="1";const r=tipEl.getBoundingClientRect();
+  tipEl.style.left=Math.min(innerWidth-r.width-8,Math.max(8,e.clientX+12))+"px";
+  tipEl.style.top=Math.max(8,e.clientY-r.height-12)+"px";}
+const hideTip=()=>tipEl.style.opacity="0";
+function drawNet(data){
+  const svg=$("#netChart"); if(!svg) return;
+  if(!data.length){svg.setAttribute("viewBox","0 0 520 70");svg.innerHTML='<text x="12" y="34" class="axis">Nothing logged yet.</text>';return;}
+  const W=Math.max(520,data.length*56),H=250,m={t:14,r:14,b:36,l:64};
+  const vals=data.map(d=>d.net),lo=Math.min(0,...vals),hi=Math.max(0,...vals),span=(hi-lo)||1;
+  const iw=W-m.l-m.r,ih=H-m.t-m.b,bw=Math.min(32,iw/data.length*.6),y=v=>m.t+ih-((v-lo)/span)*ih;
+  let g='<g class="grid">',ax='<g class="axis">';
+  for(let i=0;i<=4;i++){const v=lo+span*i/4;g+=`<line x1="${m.l}" x2="${W-m.r}" y1="${y(v)}" y2="${y(v)}"/>`;
+    ax+=`<text x="${m.l-8}" y="${y(v)+3}" text-anchor="end">${money0(v)}</text>`;}
+  g+="</g>"+ax+"</g>"+`<line class="zero" x1="${m.l}" x2="${W-m.r}" y1="${y(0)}" y2="${y(0)}"/>`;
+  data.forEach((d,i)=>{const cx=m.l+iw/data.length*(i+.5),top=Math.min(y(d.net),y(0)),h=Math.abs(y(d.net)-y(0));
+    g+=`<rect rx="3" x="${cx-bw/2}" y="${top}" width="${bw}" height="${Math.max(2,h)}" fill="${d.net<0?"var(--neg)":"var(--pos)"}" data-i="${i}"/>`;
+    g+=`<g class="axis"><text x="${cx}" y="${H-14}" text-anchor="middle">${d.p.id.replace("PP","")}</text></g>`;});
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);svg.innerHTML=g;
+  svg.querySelectorAll("rect[data-i]").forEach(rc=>{const d=data[+rc.dataset.i];
+    rc.addEventListener("mousemove",e=>showTip(`<b>${esc(d.p.id)}</b> ${esc(d.p.short)}<br>Revenue <b>${money0(d.revenue)}</b><br>
+      Labor <b>${money0(d.labor)}</b> (${pct(d.laborPct)})<br>Spend <b>${money0(d.opex)}</b><br>Net <b>${money0(d.net)}</b>`,e));
+    rc.addEventListener("mouseleave",hideTip);});
+}
+
+/* ---- SETUP ---- */
+function renderSetup(){
+  $("#viewSub").textContent="rates, reserves, crew, backups";
+  const r=S.settings.rates, rs=S.settings.reserve;
+  const F=[["owner","Owner rate","%"],["team","Team Lead rate (2+)","%"],["junior","Technician rate","%"],
+           ["solo","Solo rate","%"],["tax","Employer payroll tax","%"],["minWage","Minimum wage","$"]];
+  $("#v-setup").innerHTML=`
+    <div class="card"><h2>Put this on your desktop and your phone</h2>
+      <p class="sub">One copy, same data everywhere — as long as you always open it from this same link.</p>
+      <div class="qb">
+        <div class="qbcard"><div class="nm">Desktop</div>
+          <p class="hint">In Chrome, open the ⋮ menu → <b>Cast, save and share</b> → <b>Install page as app</b>
+          (older Chrome: <b>More tools → Create shortcut</b>, tick "Open as window"). You get a Matrix Ledger
+          icon in your taskbar that opens with no address bar, like a real app.</p></div>
+        <div class="qbcard"><div class="nm">Phone</div>
+          <p class="hint">Open the same link in Chrome or Safari, then <b>Share → Add to Home Screen</b>.
+          Same icon treatment, works one-handed in the van.</p></div>
+        <div class="qbcard"><div class="nm">How the sync works</div>
+          <p class="hint">Each device keeps its own copy in browser storage, which is why it opens instantly
+          and works with no signal. Every save also goes up to the cloud a second later, and the
+          Command Center's Finance page reads those numbers straight from there — you never have to
+          send anything. Open the ledger on another device and it pulls the newest copy down.
+          If you are out of signal, keep working: the device copy is written first, and the cloud
+          catches up when you are back.</p></div>
+      </div>
+      <p class="hint" style="margin-top:.6rem"><b>Careful:</b> a downloaded copy saved to your hard drive is a
+      <i>separate</i> silo — browser storage is per-address, so a file opened from your Downloads folder will not
+      see what the hosted link has. Treat downloads as backups, not as a second place to work.</p></div>
+    <div class="two">
+      <div class="card"><h2>Commission rates</h2>
+        <div class="grid">${F.map(([k,l,u])=>`<div class="f"><label>${l}</label>
+          <input type="number" step="${u==="%"?"0.5":"0.25"}" value="${u==="%"?(r[k]*100).toFixed(2):r[k]}" data-r="${k}" data-u="${u}"></div>`).join("")}</div>
+        <p class="hint" style="margin-top:.7rem">A crew of two costs you both their rates — two Team Leads
+          at ${pct(r.team)} each is ${pct(r.team*2)} of the job. One person solo is ${pct(r.solo)}, whoever
+          they are. <b>Solo is the cheaper way to run a job</b>, and the app works that out from the crew
+          size on its own — there is nothing to tick.</p>
+        <p class="hint">Rates are per role: <b>Owner</b> ${pct(r.owner)} · <b>Team Lead</b> ${pct(r.team)} ·
+          <b>Technician</b> ${pct(r.junior)}.</p></div>
+      <div class="card"><h2>Tax reserves</h2>
+        <div class="grid">
+          <div class="f"><label>Income tax set-aside</label><input type="number" step="1" value="${(rs.incomeTax*100).toFixed(0)}" data-rs="incomeTax"></div>
+          <div class="f"><label>Kansas sales tax</label><input type="number" step="0.5" value="${(rs.ksSalesTax*100).toFixed(1)}" data-rs="ksSalesTax"></div>
+          <div class="f" style="grid-column:span 2"><label>Income tax is a % of…</label>
+            <select id="taxBase">
+              <option value="transfer"${rs.taxBase==="transfer"?" selected":""}>The bank transfer to owners</option>
+              <option value="draws"${rs.taxBase==="draws"?" selected":""}>All owner work pay, cash included</option>
+            </select></div>
+        </div>
+        <p class="hint" style="margin-top:.7rem">Set to the bank transfer: cash paid to owners is left out of the reserve, so the
+          savings amount tracks only what moves between accounts.</p></div>
+    </div>
+    <div class="two">
+      <div class="card"><h2>Crew</h2>
+        <div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th class="n">Rate</th><th>On the crew</th><th></th></tr></thead>
+          <tbody>${S.settings.techs.map((t,i)=>`<tr${t.active===false?' style="opacity:.55"':''}>
+            <td><input value="${esc(t.name)}" data-tn="${i}" style="width:8rem"></td>
+            <td><select data-tr="${i}">${ROLES.map(x=>`<option${x===t.role?" selected":""}>${x}</option>`).join("")}</select></td>
+            <td class="n">${pct(baseRate(t.name))}</td>
+            <td><label style="display:flex;gap:.35rem;align-items:center;font-size:.8rem">
+              <input type="checkbox" data-ta="${i}"${t.active===false?"":" checked"}>
+              ${t.active===false?'<span class="pill mut">left</span>':"active"}</label></td>
+            <td><button class="sm danger" data-tx="${i}">×</button></td></tr>`).join("")}</tbody></table></div>
+        <div class="bar"><button class="sm" id="addTech">Add a tech</button></div>
+        <p class="hint" style="margin-top:.5rem">Owners are paid as a draw, not through QuickBooks payroll.</p>
+        <p class="hint"><b>When someone leaves, untick "on the crew" — do not delete them.</b> This list is
+          also the commission-rate lookup. Deleting a name drops their rate to 0% and silently recalculates
+          every pay period they already worked, so an old period would quietly stop paying them.
+          Unticking hides them from new job entry and changes nothing historical.</p></div>
+      <div class="card"><h2>Payment methods</h2>
+        <p class="sub">Which of these count as cash in hand, and which are Kansas sales.</p>
+        <div class="scroll"><table><thead><tr><th>Method</th><th>Cash</th><th>Kansas</th></tr></thead>
+          <tbody>${S.settings.methods.map(m=>`<tr><td>${esc(m)}</td>
+            <td><input type="checkbox" data-cash="${esc(m)}" ${S.settings.cashMethods.indexOf(m)>-1?"checked":""}></td>
+            <td><input type="checkbox" data-ks="${esc(m)}" ${S.settings.ksMethods.indexOf(m)>-1?"checked":""}></td></tr>`).join("")}</tbody></table></div></div>
+    </div>
+    <div class="card"><h2>Backups</h2>
+      <p class="sub">Every save syncs on its own. The button is only there for when you want to watch it happen.</p>
+      <div class="bar">
+        <button class="pri" id="cloudSave">Sync now</button>
+        <button id="expJson">Download backup file</button>
+        <button id="impJson">Restore from a backup</button>
+        <button id="loadSample">Load a sample period</button>
+        <button class="danger" id="wipe">Erase everything</button></div>
+      <div id="restoreBox" hidden style="margin-top:.7rem">
+        <p class="hint" style="margin-bottom:.3rem">Open the backup file in any text editor, copy all of it,
+          and paste it here. This <b>replaces everything</b> currently on this device.</p>
+        <textarea id="restoreText" rows="4" style="width:100%" placeholder='{"v":6,"settings":{…'></textarea>
+        <div class="bar"><button class="pri" id="doRestore">Replace everything with this backup</button></div>
+      </div>
+      <p class="hint" id="dataStat" style="margin-top:.7rem"></p></div>`;
+  $$("[data-r]").forEach(i=>i.addEventListener("change",()=>{
+    S.settings.rates[i.dataset.r]=i.dataset.u==="%"?num(i.value)/100:num(i.value);save();renderAll();}));
+  $$("[data-rs]").forEach(i=>i.addEventListener("change",()=>{
+    S.settings.reserve[i.dataset.rs]=num(i.value)/100;save();renderAll();}));
+  $("#taxBase").addEventListener("change",e=>{S.settings.reserve.taxBase=e.target.value;save();renderAll();});
+  $$("[data-cash]").forEach(c=>c.addEventListener("change",()=>{
+    const m=c.dataset.cash, a=S.settings.cashMethods;
+    S.settings.cashMethods=c.checked?[...new Set(a.concat(m))]:a.filter(x=>x!==m); save(); renderAll();}));
+  $$("[data-ks]").forEach(c=>c.addEventListener("change",()=>{
+    const m=c.dataset.ks, a=S.settings.ksMethods;
+    S.settings.ksMethods=c.checked?[...new Set(a.concat(m))]:a.filter(x=>x!==m); save(); renderAll();}));
+  $$("[data-tn]").forEach(i=>i.addEventListener("change",()=>{
+    const old=S.settings.techs[+i.dataset.tn].name, nu=i.value.trim()||old;
+    S.jobs.forEach(j=>j.techs=(j.techs||[]).map(n=>n===old?nu:n));
+    S.settings.techs[+i.dataset.tn].name=nu;save();renderAll();}));
+  $$("[data-tr]").forEach(s=>s.addEventListener("change",()=>{S.settings.techs[+s.dataset.tr].role=s.value;save();renderAll();}));
+  $$("[data-tx]").forEach(b=>b.addEventListener("click",()=>{S.settings.techs.splice(+b.dataset.tx,1);save();renderAll();}));
+  $("#addTech").addEventListener("click",()=>{S.settings.techs.push({name:"New tech",role:"Team Lead",active:true});save();renderAll();});
+  $$("[data-ta]").forEach(b=>b.addEventListener("change",()=>{
+    S.settings.techs[+b.dataset.ta].active=b.checked; save(); renderAll();
+    toast(b.checked?"Back on the crew.":"Marked as left — their past pay is untouched.");}));
+  $("#cloudSave").addEventListener("click",cloudSave);
+  $("#expJson").addEventListener("click",()=>offer("matrix-ledger-backup.json",JSON.stringify(S,null,2)));
+  $("#impJson").addEventListener("click",()=>{
+    const box=$("#restoreBox");
+    box.hidden=!box.hidden;
+    if(!box.hidden) $("#restoreText").focus();});
+  const doRestore=$("#doRestore");
+  if(doRestore) arm(doRestore,()=>{
+    const t=$("#restoreText").value.trim();
+    if(!t){toast("Paste the backup file's contents in the box first.");return;}
+    try{ const o=JSON.parse(t); if(!o.settings||!o.jobs) throw 0;
+      S=o; if(!S.extras)S.extras={}; save(); fillPeriods(); renderAll(); toast("Restored."); }
+    catch(e){ toast("That didn't look like a Matrix Ledger backup."); }});
+  arm($("#loadSample"),()=>{
+    loadSample();save();CUR="PP16";fillPeriods();renderAll();toast("Sample loaded — erase it when you're done.");});
+  arm($("#wipe"),()=>{ S=blank();save();fillPeriods();renderAll();toast("Erased."); });
+  $("#dataStat").textContent=S.jobs.length+" jobs · "+Object.keys(S.spend).length+" periods with spend · "+
+    Math.round(JSON.stringify(S).length/1024)+" KB"+((cloud||supa)?"":" · cloud sync unavailable in this view");
+}
+async function offer(filename,data){
+  let dl=null; try{dl=window.claude&&claude.use?await claude.use("downloads"):null;}catch(e){}
+  if(dl){
+    try{await dl.save({filename,data});toast("Saved "+filename);}
+    catch(e){toast(e&&e.code==="declined"?"Cancelled.":"Couldn't save that file.");}
+    return;
+  }
+  /* Off the artifact sandbox an anchor download just works and asks nobody. */
+  try{
+    const url=URL.createObjectURL(new Blob([data],{type:"application/json"}));
+    const a=document.createElement("a"); a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+    toast("Saved "+filename);
+  }catch(e){ toast("Couldn't save that file."); }
+}
+function loadSample(){
+  const J=(date,cust,svc,price,tip,pay,techs,hours,adj)=>({id:uid(),date,customer:cust,service:svc,price,tip,
+    payment:pay,status:"Completed",techs:techs.filter(Boolean),adj:adj||[0,0,0],hours,notes:"sample"});
+  S.jobs=S.jobs.concat([
+    J("2026-07-27","Card client","Premium",375,0,"Card (MO)",["Mikey","Gannon"],4),
+    J("2026-07-27","Cash client","Standard",280,40,"Cash",["Mikey","Gannon"],3),
+    J("2026-07-28","Ceramic client","Ceramic Coating",1040,160,"Card (MO)",["Mikey","Gannon"],8),
+    J("2026-07-29","Venmo client","Premium",290,0,"Venmo",["Mikey","Gannon"],3.5),
+    J("2026-07-29","Card client","Exterior Only",220,34,"Card (MO)",["Mikey","Gannon"],2.5),
+    J("2026-07-29","Venmo client","Standard",175,0,"Venmo",["Mikey","Gannon"],2),
+    J("2026-07-30","Card client","Premium",270,0,"Card (MO)",["Mikey","Gannon"],3),
+    J("2026-07-30","Card client","Premium",270,30,"Card (MO)",["Mikey","Gannon"],3),
+    J("2026-07-30","Cash client","Standard",220,0,"Cash",["Mikey","Gannon"],2.5),
+    J("2026-07-31","Venmo client","Premium",320,0,"Venmo",["Mikey","Gannon"],3.5),
+    J("2026-07-31","Venmo client","Premium",300,0,"Venmo",["Mikey","Gannon"],3),
+    J("2026-08-01","KS client","Standard",245,20,"Card (KS)",["Mikey"],3),
+    J("2026-08-03","Card client","Premium",310,31.5,"Card (MO)",["Habib","Gannon"],3),
+    J("2026-08-03","Card client","Premium",300,38,"Card (MO)",["Habib","Gannon"],3),
+    J("2026-08-04","Card client","Premium",310,20,"Card (MO)",["Mikey","Gannon"],3,[-47,0,0]),
+    J("2026-08-04","Cash client","Premium",400,50,"Cash",["Mikey","Gannon"],4),
+    J("2026-08-05","Ceramic client","Ceramic Coating",1400,0,"Check",["Habib","Ryan"],10),
+    J("2026-08-06","Card client","Premium",340,7.5,"Card (MO)",["Mikey","Gannon"],3.5),
+    J("2026-08-06","Venmo client","Standard",265,0,"Venmo",["Mikey","Gannon"],2.5),
+    J("2026-08-07","Card client","Standard",230,17.5,"Card (MO)",["Mikey","Gannon"],2.5),
+    J("2026-08-07","Card client","Premium",300,25,"Card (MO)",["Habib","Ryan"],3),
+    J("2026-08-07","KS client","Standard",200,25,"Card (KS)",["Christian","Gannon"],3),
+    J("2026-08-08","Ceramic client","Ceramic Coating",1400,0,"Venmo",["Habib","Ryan"],10),
+    J("2026-08-08","Venmo client","Premium",455,0,"Venmo",["Mikey","Christian"],4),
+    J("2026-08-08","Venmo client","Exterior Only",220,40,"Venmo",["Mikey","Christian"],2.5),
+    J("2026-08-09","Cash client","Add-on",50,0,"Cash",["Mikey"],1)]);
+  S.spend.PP16={Gas:213.53,Supplies:1258.30,Food:69.16,Ads:1079.79,Accountant:60,Insurance:112.97,GHL:31.87,Other:468};
+}
+
+/* ---- boot ---- */
+function renderAll(){
+  fillPeriods();
+  ({period:renderPeriod,moves:renderMoves,payroll:renderPayroll,jobs:renderJobs,
+    spend:renderSpend,year:renderYear,setup:renderSetup})[VIEW]();
+  paintSync();
+}
+fillPeriods(); renderAll();
+let rz=null; addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(()=>{if(VIEW==="year")renderYear();},220);});
+</script>
+
+</body>
+</html>

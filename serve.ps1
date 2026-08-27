@@ -9,7 +9,10 @@ while ($listener.IsListening) {
     $ctx = $listener.GetContext()
     $rel = [System.Uri]::UnescapeDataString($ctx.Request.Url.AbsolutePath.TrimStart('/'))
     if ([string]::IsNullOrEmpty($rel)) { $rel = "matrixcommandcenter/index.html" }
-    $path = Join-Path $Root $rel
+    # Netlify publishes matrixcommandcenter/ as the site root, so /ledger/ must
+    # resolve there too — otherwise links work in production and 404 locally.
+    $path = Join-Path $Root (Join-Path "matrixcommandcenter" $rel)
+    if (-not (Test-Path $path)) { $path = Join-Path $Root $rel }
     if (Test-Path $path -PathType Container) { $path = Join-Path $path "index.html" }
     if (Test-Path $path -PathType Leaf) {
       $bytes = [System.IO.File]::ReadAllBytes($path)

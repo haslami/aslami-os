@@ -343,6 +343,56 @@ const supa = (SUPA_URL && SUPA_KEY && window.supabase)
   ? window.supabase.createClient(SUPA_URL, SUPA_KEY)
   : null;
 
+/* ============================================================
+   MATRIX LEDGER  — finance numbers, read-only
+   The ledger at /ledger/ is the system of record and pushes a finished
+   summary into row 'ledger' of the same table. This page NEVER re-derives
+   payroll, expenses or net: the ledger owns that math, and a second
+   implementation here would quietly disagree the first time a rate changed.
+   ============================================================ */
+const SUPA_LEDGER_ROW = 'ledger';
+const LEDGER_URL = 'ledger/';
+
+function useLedger(){
+  const [sum,setSum]=useState(null);
+  const [status,setStatus]=useState(supa?'loading':'offline');
+  const [at,setAt]=useState(null);
+  useEffect(()=>{
+    if(!supa){ setStatus('offline'); return; }
+    let dead=false;
+    const take=(row)=>{
+      if(dead||!row) return;
+      const s=row.data&&row.data.summary;
+      if(!s){ setStatus('empty'); return; }
+      setSum(s); setAt(Date.parse(row.updated_at)||Date.now()); setStatus('ok');
+    };
+    const pull=async()=>{
+      try{
+        const { data,error }=await supa.from(SUPA_TABLE).select('data,updated_at')
+          .eq('id',SUPA_LEDGER_ROW).maybeSingle();
+        if(dead) return;
+        if(error){ setStatus('error'); return; }
+        if(!data){ setStatus('empty'); return; }
+        take(data);
+      }catch(e){ if(!dead) setStatus('error'); }
+    };
+    pull();
+    /* Unique topic per mount — the Dashboard and the Finance page both read the
+       ledger, and two channels sharing one topic name step on each other. */
+    const ch=supa.channel('matrix-ledger-read-'+Math.random().toString(36).slice(2,8))
+      .on('postgres_changes',
+        { event:'*',schema:'public',table:SUPA_TABLE,filter:'id=eq.'+SUPA_LEDGER_ROW },
+        (pl)=>{ if(pl.new) take(pl.new); })
+      .subscribe();
+    const onFocus=()=>pull();
+    window.addEventListener('focus',onFocus);
+    const iv=setInterval(pull,60000);
+    return ()=>{ dead=true; supa.removeChannel(ch); window.removeEventListener('focus',onFocus); clearInterval(iv); };
+  },[]);
+  return { sum, status, at };
+}
+const fmtClock = ms => ms? new Date(ms).toLocaleTimeString([],{ hour:'numeric',minute:'2-digit' }) : '';
+
 /* GHL custom-field IDs (discovered from live records) */
 const CF_VEHICLE='MJaH6FI38stKWO0Q4z4k';
 const CF_SERVICE='giKcGWgma7eU1SZmcAoH';
@@ -1094,12 +1144,16 @@ function Dashboard(){
   const leadsThisMonth = leads.filter(l=>l.ts>=new Date(NOW.getFullYear(),NOW.getMonth(),1).getTime()).length;
   const ceramicRev = live.filter(a=>a.service==='ceramic'&&a.date>=mStart&&a.date<=TODAY).reduce((s,a)=>s+(a.price||0),0);
   const breakdown = serviceBreakdown(live);
+  /* The ledger owns this number once it has one. The hand-typed total stays as
+     the fallback for the case where the sync is down or nothing is logged yet. */
+  const { sum:led, at:ledAt } = useLedger();
+  const ledRev = led && led.year ? led.year.revenue : null;
 
   return (
     <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
       <PageHead title="Command Center" sub={NOW.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})+' · Matrix Mobile Details'}/>
 
-      {/* 2026 TOTAL REVENUE (manual, synced) */}
+      {/* 2026 TOTAL REVENUE — live from the ledger, hand-typed only as fallback */}
       <Card pad={20} style={{ marginBottom:18,display:'flex',alignItems:'center',justifyContent:'space-between',gap:16,
         background:`linear-gradient(135deg, ${C.green}14, ${C.gold}0e)`,borderColor:C.green+'44' }}>
         <div style={{ display:'flex',alignItems:'center',gap:14 }}>
@@ -1117,10 +1171,14 @@ function Dashboard(){
                   border:'none',borderBottom:`2px solid ${C.green}`,outline:'none',width:200,fontFamily:'inherit' }}/>
             ) : (
               <div style={{ fontSize:32,fontWeight:800,color:C.text,lineHeight:1.05,marginTop:2 }}>
-                {revenue2026!=null?fmt$(revenue2026):BLANK}
+                {ledRev!=null?fmt$(ledRev):(revenue2026!=null?fmt$(revenue2026):BLANK)}
               </div>
             )}
-            <div style={{ fontSize:11,color:C.textDim,marginTop:3 }}>From your finance spreadsheet · synced with Ryan</div>
+            <div style={{ fontSize:11,color:C.textDim,marginTop:3 }}>
+              {ledRev!=null
+                ? <>Live from the Matrix Ledger · net {fmt$(led.year.net)}{ledAt?' · synced '+fmtClock(ledAt):''}</>
+                : 'From your finance spreadsheet · synced with Ryan'}
+            </div>
           </div>
         </div>
         <div style={{ display:'flex',gap:8,flex:'0 0 auto' }}>
@@ -1131,6 +1189,12 @@ function Dashboard(){
               <button onClick={()=>setEditingRev(false)} style={{ padding:'9px 14px',borderRadius:9,
                 border:`1px solid ${C.border}`,background:'transparent',color:C.textDim,fontSize:13,cursor:'pointer' }}>Cancel</button>
             </>
+          ) : ledRev!=null ? (
+            <a href={LEDGER_URL} style={{ padding:'9px 16px',borderRadius:9,textDecoration:'none',
+              border:`1px solid ${C.green}55`,background:`${C.green}1c`,color:C.green,fontWeight:600,fontSize:13,
+              display:'flex',alignItems:'center',gap:7 }}>
+              <Icon name="chart" size={14} color={C.green}/>Open ledger
+            </a>
           ) : (
             <button onClick={beginEditRev} style={{ padding:'9px 16px',borderRadius:9,
               border:`1px solid ${C.green}55`,background:`${C.green}1c`,color:C.green,fontWeight:600,fontSize:13,
@@ -2190,119 +2254,143 @@ function Finance(){
   const monthly=revMonthly(live);
   const jobsThisMonth=live.filter(a=>a.date>=mStart&&a.date<=TODAY).length;
   const ceramicRev=live.filter(a=>a.service==='ceramic'&&a.date>=mStart&&a.date<=TODAY).reduce((s,a)=>s+(a.price||0),0);
-  const [shData,setShData]=useState(null);
-  const [shStatus,setShStatus]=useState('loading');
-  useEffect(()=>{
-    fetch('/.netlify/functions/sheets')
-      .then(r=>r.json())
-      .then(d=>{
-        if(d.error){ setShStatus(d.error.includes('not configured')?'unconfigured':'error'); return; }
-        setShData(d); setShStatus('ok');
-      })
-      .catch(()=>setShStatus('error'));
-  },[]);
+  const { sum:led, status:ledStatus, at:ledAt } = useLedger();
+  const ly = led && led.year;
+  const periodsNewestFirst = led ? led.periods.slice().reverse() : [];
 
   return (
     <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
       <PageHead title="Finance" sub="Matrix Mobile Details · 2026"/>
 
-      {/* === GOOGLE SHEETS LIVE DATA === */}
-      {shStatus==='loading' && (
-        <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:16 }}>
-          {[1,2,3].map(i=>(<div key={i} style={{ height:88,borderRadius:12,background:C.panel }} className="pulse-soft"/>))}
+      {/* === MATRIX LEDGER — LIVE FINANCE NUMBERS === */}
+      {ledStatus==='loading' && (
+        <div style={{ display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:16 }} className="grid-resp">
+          {[1,2,3,4].map(i=>(<div key={i} style={{ height:88,borderRadius:12,background:C.panel }} className="pulse-soft"/>))}
         </div>
       )}
-      {shStatus==='unconfigured' && (
+      {ledStatus==='empty' && (
         <Card pad={20} style={{ marginBottom:16,borderColor:C.gold+'44',background:`${C.gold}08` }}>
           <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
             <Icon name="alert" size={18} color={C.gold}/>
             <div>
-              <div style={{ fontWeight:700,fontSize:14,color:C.gold,marginBottom:8 }}>Connect Google Sheets — 3 quick steps</div>
-              <div style={{ fontSize:12.5,color:C.textDim,lineHeight:2 }}>
-                1. Google Cloud Console → Enable Sheets API → Create API Key<br/>
-                2. Open Matrix Finances → Share → Anyone with the link → Viewer<br/>
-                3. Netlify → Site Settings → Environment Variables → add <code style={{ background:C.bg3,padding:'1px 7px',borderRadius:4,color:C.green }}>SHEETS_API_KEY</code>
+              <div style={{ fontWeight:700,fontSize:14,color:C.gold,marginBottom:6 }}>Nothing synced from the ledger yet</div>
+              <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.7 }}>
+                Open <a href={LEDGER_URL} style={{ color:C.green,fontWeight:600 }}>the Matrix Ledger</a> once
+                and it pushes on its own. After that, every job and every spend entry lands here within a second.
               </div>
             </div>
           </div>
         </Card>
       )}
-      {shStatus==='error' && (
+      {(ledStatus==='error'||ledStatus==='offline') && (
         <Card pad={16} style={{ marginBottom:16,borderColor:C.red+'44',background:`${C.red}08`,fontSize:12.5,color:C.red }}>
-          Could not load Google Sheets data. Check that the sheet is shared as "Anyone with link can view" and SHEETS_API_KEY is valid in Netlify env vars.
+          Could not reach the ledger sync. The numbers below are GHL booking data only.
         </Card>
       )}
-      {shStatus==='ok' && shData && (
+      {ledStatus==='ok' && ly && (
         <>
-          {/* Year Revenue Cards */}
-          <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12 }}>
-            <h2 style={{ fontSize:15,fontWeight:700 }}>2026 Year Revenue</h2>
+          {/* Year totals, straight off the ledger */}
+          <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12,flexWrap:'wrap' }}>
+            <h2 style={{ fontSize:15,fontWeight:700 }}>2026 Year to Date</h2>
             <span style={{ display:'flex',alignItems:'center',gap:5,fontSize:11,color:C.green,background:`${C.green}18`,padding:'2px 9px',borderRadius:20,fontWeight:600 }}>
               <span style={{ width:6,height:6,borderRadius:'50%',background:C.green,flexShrink:0 }}/>
-              Live · Google Sheets
+              Live · Matrix Ledger
             </span>
+            {ledAt && <span style={{ fontSize:11,color:C.textMuted }}>synced {fmtClock(ledAt)}</span>}
+            <a href={LEDGER_URL} style={{ marginLeft:'auto',fontSize:12,color:C.green,fontWeight:600,textDecoration:'none' }}>Open the ledger →</a>
           </div>
-          <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:18 }} className="grid-resp">
+          <div style={{ display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:18 }} className="grid-resp">
             <Card pad={18} style={{ borderColor:C.green+'44' }}>
-              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Gross Revenue</div>
-              <div style={{ fontSize:26,fontWeight:800,color:C.green }}>{fmt$(shData.yearGross)}</div>
+              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Revenue</div>
+              <div style={{ fontSize:26,fontWeight:800,color:C.green }}>{fmt$(ly.revenue)}</div>
+              <div style={{ fontSize:11,color:C.textMuted,marginTop:4 }}>{ly.jobs} jobs · {ly.periods} periods</div>
+            </Card>
+            <Card pad={18} style={{ borderColor:C.gold+'33' }}>
+              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Labor</div>
+              <div style={{ fontSize:26,fontWeight:800,color:C.gold }}>{fmt$(ly.labor)}</div>
+              <div style={{ fontSize:11,color:C.textMuted,marginTop:4 }}>
+                {ly.laborPct!=null?Math.round(ly.laborPct*100)+'% of revenue':BLANK}
+              </div>
             </Card>
             <Card pad={18} style={{ borderColor:C.red+'33' }}>
-              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Total Expenses</div>
-              <div style={{ fontSize:26,fontWeight:800,color:C.red }}>{fmt$(shData.yearExpenses)}</div>
+              <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Spend</div>
+              <div style={{ fontSize:26,fontWeight:800,color:C.red }}>{fmt$(ly.opex)}</div>
+              <div style={{ fontSize:11,color:C.textMuted,marginTop:4 }}>gas, supplies, van, ads</div>
             </Card>
             <Card pad={18} style={{ borderColor:C.cyan+'33' }}>
               <div style={{ fontSize:11,color:C.textDim,fontWeight:600,letterSpacing:.5,textTransform:'uppercase',marginBottom:6 }}>Net Income</div>
-              <div style={{ fontSize:26,fontWeight:800,color:shData.yearNet>=0?C.cyan:C.red }}>{fmt$(shData.yearNet)}</div>
+              <div style={{ fontSize:26,fontWeight:800,color:ly.net>=0?C.cyan:C.red }}>{fmt$(ly.net)}</div>
+              <div style={{ fontSize:11,color:C.textMuted,marginTop:4 }}>
+                {ly.netPct!=null?(ly.netPct*100).toFixed(1)+'% margin':BLANK}
+              </div>
             </Card>
           </div>
 
-          {/* Monthly Revenue Tracker */}
-          {shData.monthly.length>0 && (
+          {/* The blend is not one clean number and must not be shown as one. */}
+          {ly.mixed && (
+            <Card pad={16} style={{ marginBottom:16,borderColor:C.gold+'33',background:`${C.gold}07` }}>
+              <div style={{ display:'flex',gap:10,alignItems:'flex-start' }}>
+                <Icon name="alert" size={16} color={C.gold}/>
+                <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.7 }}>
+                  <b style={{ color:C.gold }}>This year total mixes two measures.</b>{' '}
+                  <b style={{ color:C.text }}>{ly.ledger.periods}</b> periods are on the ledger
+                  ({fmt$(ly.ledger.revenue)} — job revenue only, tips excluded) and{' '}
+                  <b style={{ color:C.text }}>{ly.oldBook.periods}</b> still come from the old workbook
+                  ({fmt$(ly.oldBook.revenue)} — gross including tips and Kansas sales tax).
+                  Old-book periods run roughly 6–7% high, so importing one into the ledger makes the
+                  year revenue drop. Nothing is lost — the number gets more honest.
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Monthly revenue */}
+          {led.monthly.length>0 && (
             <Card pad={20} style={{ marginBottom:16 }}>
-              <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Monthly Revenue Tracker</h3>
-              <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>Aggregated from pay period data · Google Sheets</p>
+              <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Monthly Revenue</h3>
+              <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>Exact where the ledger has job dates · prorated across old-book periods</p>
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={shData.monthly} margin={{ top:5,right:8,left:-18,bottom:0 }}>
+                <BarChart data={led.monthly} margin={{ top:5,right:8,left:-18,bottom:0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false}/>
                   <XAxis dataKey="month" tick={{ fontSize:11 }} axisLine={false} tickLine={false}/>
                   <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+Math.round(v/1000)+'k'}/>
                   <RTooltip content={<ChartTip money/>} cursor={{ fill:'rgba(31,197,106,0.06)' }}/>
-                  <Bar dataKey="gross" radius={[5,5,0,0]} name="Gross Revenue">
-                    {shData.monthly.map((e,i)=><Cell key={i} fill={C.green}/>)}
+                  <Bar dataKey="revenue" radius={[5,5,0,0]} name="Revenue">
+                    {led.monthly.map((e,i)=><Cell key={i} fill={C.green}/>)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </Card>
           )}
 
-          {/* Pay Period Revenue Tracker */}
-          {shData.payPeriods.length>0 && (
+          {/* Pay periods */}
+          {periodsNewestFirst.length>0 && (
             <Card pad={0} style={{ marginBottom:20,overflow:'hidden' }}>
               <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
-                <h3 style={{ fontSize:15,fontWeight:700 }}>Pay Period Revenue Tracker</h3>
-                <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>{shData.payPeriods.length} periods · newest first</p>
+                <h3 style={{ fontSize:15,fontWeight:700 }}>Pay Periods</h3>
+                <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>{periodsNewestFirst.length} periods · newest first</p>
               </div>
               <div>
-                {shData.payPeriods.slice().reverse().map((p,idx)=>{
+                {periodsNewestFirst.map((p,idx)=>{
                   const isLatest=idx===0;
-                  const pctOfYear=shData.yearGross>0?Math.round(p.gross/shData.yearGross*100):0;
-                  const maxG=Math.max(...shData.payPeriods.map(x=>x.gross));
-                  const barW=maxG>0?Math.round(p.gross/maxG*100):0;
+                  const maxG=Math.max(...periodsNewestFirst.map(x=>x.revenue),1);
+                  const barW=Math.round(p.revenue/maxG*100);
                   return (
-                    <div key={p.label} style={{ display:'flex',alignItems:'center',gap:14,padding:'11px 20px',borderBottom:`1px solid ${C.border}22`,background:isLatest?`${C.green}08`:'transparent' }}>
-                      <div style={{ width:110,fontSize:13,fontWeight:isLatest?700:500,color:isLatest?C.green:C.text,flexShrink:0 }}>
-                        {p.label}
-                        {isLatest && <div style={{ fontSize:10,color:C.green,fontWeight:600,marginTop:1 }}>LATEST</div>}
+                    <div key={p.id} style={{ display:'flex',alignItems:'center',gap:14,padding:'11px 20px',borderBottom:`1px solid ${C.border}22`,background:isLatest?`${C.green}08`:'transparent' }}>
+                      <div style={{ width:120,flexShrink:0 }}>
+                        <div style={{ fontSize:13,fontWeight:isLatest?700:500,color:isLatest?C.green:C.text }}>{p.short}</div>
+                        <div style={{ fontSize:10,fontWeight:600,marginTop:1,color:p.live?C.green:C.textMuted }}>
+                          {p.live?'LEDGER':'OLD BOOK'}
+                        </div>
                       </div>
                       <div style={{ flex:1,minWidth:0 }}>
-                        <div style={{ display:'flex',alignItems:'baseline',gap:8,marginBottom:5 }}>
-                          <span style={{ fontSize:14,fontWeight:700,color:C.text }}>{fmt$(p.gross)}</span>
-                          <span style={{ fontSize:11,color:C.textDim }}>{pctOfYear}% of year</span>
-                          {p.net!==0 && <span style={{ fontSize:11,color:p.net>=0?C.green:C.red,marginLeft:'auto' }}>net {fmt$(p.net)}</span>}
+                        <div style={{ display:'flex',alignItems:'baseline',gap:8,marginBottom:5,flexWrap:'wrap' }}>
+                          <span style={{ fontSize:14,fontWeight:700,color:C.text }}>{fmt$(p.revenue)}</span>
+                          <span style={{ fontSize:11,color:C.textDim }}>{p.jobs} jobs</span>
+                          <span style={{ fontSize:11,color:p.net>=0?C.green:C.red,marginLeft:'auto' }}>net {fmt$(p.net)}</span>
                         </div>
                         <div style={{ height:4,background:C.bg3,borderRadius:2,overflow:'hidden' }}>
-                          <div style={{ height:'100%',width:barW+'%',background:isLatest?C.green:`${C.green}55`,borderRadius:2 }}/>
+                          <div style={{ height:'100%',width:barW+'%',background:p.live?C.green:`${C.green}44`,borderRadius:2 }}/>
                         </div>
                       </div>
                     </div>
