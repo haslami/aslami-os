@@ -620,15 +620,31 @@ function AppProvider({ children }){
     materializeRecurring();   /* surface any due instances from synced templates */
   },[materializeRecurring]);
 
+  /* Sync health, surfaced in the UI. This used to swallow every failure, so the
+     database could disappear and every device would just quietly drift apart on
+     its own local copy — which is exactly what happened. Never fail silently. */
+  const [syncState, setSyncState] = useState({ status: supa?'connecting':'off', at:null, err:null });
+  const syncOk = useCallback(()=>setSyncState({ status:'ok', at:Date.now(), err:null }),[]);
+  const syncBad = useCallback((e)=>{
+    const raw=(e && (e.message||e.error_description||e.code)) || '';
+    /* Plain language — this shows on a phone screen, not in a console. */
+    const err = /fetch|network/i.test(raw) ? "can't reach the database"
+      : /row-level security|permission|policy/i.test(raw) ? 'the database refused the write'
+      : raw || 'unreachable';
+    setSyncState(s=>({ status:'down', at:s.at, err }));
+  },[]);
+
   const pullRemote = useCallback(async ()=>{
     if(!supa) return;
     try{
       const { data, error } = await supa
         .from(SUPA_TABLE).select('data,updated_at')
         .eq('id', SUPA_ROW).maybeSingle();
-      if(!error && data) applyRemote(data);
-    }catch(e){}
-  },[applyRemote]);
+      if(error){ syncBad(error); return; }
+      syncOk();
+      if(data) applyRemote(data);
+    }catch(e){ syncBad(e); }
+  },[applyRemote, syncOk, syncBad]);
 
   /* initial pull + realtime subscription + focus/interval refresh */
   useEffect(()=>{
@@ -659,8 +675,10 @@ function AppProvider({ children }){
       remoteStamp.current = new Date(updated_at).getTime();
       lastSyncedRef.current = payload;
       try{
-        await supa.from(SUPA_TABLE).upsert({ id:SUPA_ROW, data:JSON.parse(payload), updated_at });
-      }catch(e){}
+        const { error } = await supa.from(SUPA_TABLE).upsert({ id:SUPA_ROW, data:JSON.parse(payload), updated_at });
+        if(error){ syncBad(error); lastSyncedRef.current = null; }   /* retry on the next change */
+        else syncOk();
+      }catch(e){ syncBad(e); lastSyncedRef.current = null; }
     }, 800);
     return ()=>{ if(pushTimer.current) clearTimeout(pushTimer.current); };
   },[tasks, ideas, goals, revenue2026, messages, announce]);
@@ -835,6 +853,8 @@ function AppProvider({ children }){
       const order=['new','contacted','quoted','won']; const i=order.indexOf(l.stage);
       return l.id===id && i<order.length-1 ? {...l,stage:order[i+1]} : l;
     })),
+
+    syncState,
   };
 
   return <AppCtx.Provider value={api}>{children}</AppCtx.Provider>;
@@ -2971,8 +2991,18 @@ function MobileNav(){
 }
 
 function Topbar(){
-  const { setPage, notifs, page } = useApp();
+  const { setPage, notifs, page, syncState } = useApp();
   const unread=notifs.filter(n=>!n.read).length;
+  /* "Live" used to be a hardcoded label that said Live whether or not anything
+     was actually syncing. It now reports the truth. */
+  const sync = syncState || { status:'off' };
+  const syncLook = sync.status==='ok'
+      ? { c:C.green, label:'Synced'+(sync.at?' '+fmtClock(sync.at):'') }
+    : sync.status==='connecting'
+      ? { c:C.textDim, label:'Connecting…' }
+    : sync.status==='off'
+      ? { c:C.textMuted, label:'This device only' }
+      : { c:C.red, label:'Not syncing' };
   return (
     <div className="hide-mobile" style={{ display:'flex',alignItems:'center',gap:14,padding:'14px 30px',
       borderBottom:`1px solid ${C.border}`,background:'rgba(6,12,24,0.6)',backdropFilter:'blur(8px)',flex:'0 0 auto' }}>
@@ -2980,9 +3010,10 @@ function Topbar(){
         <span style={{ position:'absolute',left:13,top:'50%',transform:'translateY(-50%)' }}><Icon name="search" size={16} color={C.textDim}/></span>
         <input placeholder="Search customers, jobs, tasks..." style={{ paddingLeft:38,background:C.bg2 }}/>
       </div>
-      <div style={{ marginLeft:'auto',display:'flex',alignItems:'center',gap:6 }}>
-        <span className="dot-live"/>
-        <span style={{ fontSize:12,color:C.textDim,fontWeight:600 }}>Live</span>
+      <div style={{ marginLeft:'auto',display:'flex',alignItems:'center',gap:6 }}
+        title={sync.err?('Sync error: '+sync.err):''}>
+        <span style={{ width:8,height:8,borderRadius:'50%',background:syncLook.c,flexShrink:0 }}/>
+        <span style={{ fontSize:12,color:syncLook.c,fontWeight:600 }}>{syncLook.label}</span>
       </div>
       <button onClick={()=>setPage('notifications')} style={{ position:'relative',width:38,height:38,borderRadius:10,
         background:C.bg2,border:`1px solid ${C.border}`,display:'grid',placeItems:'center',color:C.text }}>
@@ -3157,6 +3188,27 @@ function Brief(){
   );
 }
 
+/* The desktop topbar is hidden on mobile, and the phone is exactly where a
+   silent sync failure does the most damage — you keep typing into a device
+   nobody else can see. This says so on every screen size. */
+function SyncBanner(){
+  const { syncState } = useApp();
+  const s = syncState || {};
+  if(s.status!=='down' && s.status!=='off') return null;
+  const off = s.status==='off';
+  return (
+    <div style={{ flex:'0 0 auto',display:'flex',alignItems:'center',gap:10,padding:'9px 16px',
+      background:`${C.red}18`,borderBottom:`1px solid ${C.red}44`,color:C.red,fontSize:12.5,fontWeight:600 }}>
+      <Icon name="alert" size={15} color={C.red}/>
+      <span>
+        {off ? 'Not syncing — this device is on its own copy.'
+             : 'Not syncing. Changes are saving on this device only, and other devices will not see them.'}
+      </span>
+      {s.err && <span style={{ color:C.textDim,fontWeight:500,marginLeft:'auto' }}>{s.err}</span>}
+    </div>
+  );
+}
+
 function Shell(){
   const { page } = useApp();
   const Page=PAGES[page]||Dashboard;
@@ -3165,6 +3217,7 @@ function Shell(){
       <Sidebar/>
       <main style={{ flex:1,display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',minWidth:0 }}>
         <Topbar/>
+        <SyncBanner/>
         <Page/>
       </main>
       <MobileNav/>
