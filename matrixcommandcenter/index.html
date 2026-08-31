@@ -2357,9 +2357,9 @@ function Finance(){
                 <Icon name="alert" size={16} color={C.gold}/>
                 <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.7 }}>
                   <b style={{ color:C.gold }}>This year total mixes two measures.</b>{' '}
-                  <b style={{ color:C.text }}>{ly.ledger.periods}</b> periods are on the ledger
+                  <b style={{ color:C.text }}>{ly.ledger.periods}</b> {ly.ledger.periods===1?'period is':'periods are'} on the ledger
                   ({fmt$(ly.ledger.revenue)} — job revenue only, tips excluded) and{' '}
-                  <b style={{ color:C.text }}>{ly.oldBook.periods}</b> still come from the old workbook
+                  <b style={{ color:C.text }}>{ly.oldBook.periods}</b> still {ly.oldBook.periods===1?'comes':'come'} from the old workbook
                   ({fmt$(ly.oldBook.revenue)} — gross including tips and Kansas sales tax).
                   Old-book periods run roughly 6–7% high, so importing one into the ledger makes the
                   year revenue drop. Nothing is lost — the number gets more honest.
