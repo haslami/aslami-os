@@ -193,6 +193,7 @@ const NAV = [
   { id:'finance',       label:'Finance',        icon:'chart' },
   { id:'goals',         label:'Goals',          icon:'target' },
   { id:'team',          label:'Team',           icon:'message' },
+  { id:'ads',           label:'Ads',            icon:'zap' },
   { id:'reports',       label:'Reports',        icon:'file' },
   { id:'notifications', label:'Notifications',  icon:'bell' },
 ];
@@ -2858,95 +2859,189 @@ function ReportTable({ cols, rows, empty }){
 
 /* Ad spend renders on its own. It used to sit inside the GoHighLevel branch,
    which meant a GHL hiccup would silently take the ad numbers down with it. */
-function AdSpendSection({ ads, adStatus, recent30 }){
-  const L={ recent30:recent30||{} };
+/* ============================================================
+   ADS — Google Ads spend against what it actually produced
+   Spend is pushed in daily by a Google Ads Script; the lead side comes from
+   GoHighLevel over the SAME rolling 30 days, so the two halves are comparable.
+   ============================================================ */
+function StatTile({ label, value, sub, color=C.text, hint }){
   return (
-    <>
-      {/* ---- Google Ads spend, pushed in by the Ads script ---- */}
-      {adStatus==='empty' && (
-        <Card pad={20} style={{ marginBottom:16,borderColor:C.gold+'44',background:`${C.gold}08` }}>
-          <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
-            <Icon name="alert" size={18} color={C.gold}/>
-            <div>
-              <div style={{ fontWeight:700,fontSize:14,color:C.gold,marginBottom:6 }}>Ad spend not connected yet</div>
-              <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.8 }}>
-                In Google Ads go to <b>Tools → Bulk actions → Scripts → + New script</b>, paste the
-                script from <code style={{ background:C.bg3,padding:'1px 6px',borderRadius:4,color:C.green }}>google-ads-script.js</code>,
-                authorize it, run it once, then schedule it <b>Daily</b>. Spend, clicks and cost per lead
-                appear here on the next run. No developer token or API approval needed.
-              </div>
+    <Card pad={16} style={{ display:'flex',flexDirection:'column',gap:6,minHeight:96 }}>
+      <span style={{ fontSize:10.5,color:C.textDim,fontWeight:700,letterSpacing:.7,textTransform:'uppercase' }}>{label}</span>
+      <span style={{ fontSize:26,fontWeight:800,color,letterSpacing:-.6,lineHeight:1 }}>{value}</span>
+      {sub && <span style={{ fontSize:11.5,color:C.textMuted,marginTop:'auto' }}>{sub}</span>}
+      {hint && <span style={{ fontSize:10.5,color:C.textMuted }}>{hint}</span>}
+    </Card>
+  );
+}
+
+function Ads(){
+  const { ads, status:adStatus } = useAdSpend();
+  const { data, status:ghlStatus } = useGhlReports();
+  const r30 = (data && data.leads && data.leads.recent30) || null;
+
+  if(adStatus==='loading'||adStatus==='off') return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Ads" sub="Google Ads · last 30 days"/>
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:14 }} className="grid-resp">
+        {[1,2,3,4].map(i=><div key={i} style={{ height:96,borderRadius:12,background:C.panel }} className="pulse-soft"/>)}
+      </div>
+    </div>
+  );
+
+  if(adStatus!=='ok'||!ads) return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Ads" sub="Google Ads · last 30 days"/>
+      <Card pad={22} style={{ borderColor:C.gold+'44',background:`${C.gold}08` }}>
+        <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
+          <Icon name="alert" size={18} color={C.gold}/>
+          <div>
+            <div style={{ fontWeight:700,fontSize:14.5,color:C.gold,marginBottom:8 }}>No ad data yet</div>
+            <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.9 }}>
+              In Google Ads: <b>Tools → Bulk actions → Scripts → + New script</b>, paste
+              <code style={{ background:C.bg3,padding:'1px 6px',borderRadius:4,color:C.green,margin:'0 4px' }}>google-ads-script.js</code>,
+              authorize it, run it once, then schedule it <b>Daily</b>.
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+
+  const T = ads.totals || {};
+  const spend = T.cost || 0;
+  const gLeads = (r30 && r30.bySource && r30.bySource.Google) || 0;
+  const gBooked = (r30 && r30.bookedBySource && r30.bookedBySource.Google) || 0;
+  const cpl = gLeads ? spend / gLeads : null;
+  const cpb = gBooked ? spend / gBooked : null;
+  const bookRate = gLeads ? gBooked / gLeads : null;
+  /* Google counts a conversion per tracked action — a call, a form, a message —
+     so one person can register several. GHL holds the actual lead records. When
+     these two diverge, the ads number is the optimistic one. */
+  const gap = T.conversions && gLeads ? T.conversions / gLeads : null;
+
+  /* Month/day — US order. Day-first read as 01/08 for the 1st of August. */
+  const daily = (ads.daily||[]).map(d=>({ ...d, label:(+d.date.slice(5,7))+'/'+(+d.date.slice(8)) }));
+  const avgDaily = daily.length ? spend/daily.length : 0;
+
+  return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Ads" sub={`Google Ads · ${ads.accountName||''} · last ${ads.windowDays||30} days`}/>
+
+      <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:16,flexWrap:'wrap' }}>
+        <span style={{ display:'flex',alignItems:'center',gap:5,fontSize:11,color:C.green,
+          background:`${C.green}18`,padding:'2px 9px',borderRadius:20,fontWeight:600 }}>
+          <span style={{ width:6,height:6,borderRadius:'50%',background:C.green }}/>Live · Google Ads
+        </span>
+        <span style={{ fontSize:11,color:C.textMuted }}>
+          pushed {ads.updatedAt?fmtClock(ads.updatedAt):'—'} · updates daily
+        </span>
+      </div>
+
+      {/* THE THREE THAT MATTER */}
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:14,marginBottom:14 }} className="grid-resp">
+        <StatTile label="Spend · 30 days" value={fmt$(spend)} color={C.red}
+          sub={`${fmt$(avgDaily)} a day`}/>
+        <StatTile label="Cost per Lead" value={cpl!=null?fmt$(Math.round(cpl)):BLANK} color={C.gold}
+          sub={gLeads?`${gLeads} Google leads`:'no Google leads in 30d'}/>
+        <StatTile label="Cost per Booked Job" value={cpb!=null?fmt$(Math.round(cpb)):BLANK} color={C.cyan}
+          sub={gBooked?`${gBooked} booked from ads`:'none booked yet'}/>
+        <StatTile label="Booking Rate" value={bookRate!=null?(bookRate*100).toFixed(1)+'%':BLANK}
+          color={bookRate!=null&&bookRate>=0.15?C.green:C.gold}
+          sub="Google leads that booked"/>
+      </div>
+
+      {/* the honest reconciliation */}
+      {gap!=null && gap>1.15 && (
+        <Card pad={16} style={{ marginBottom:16,borderColor:C.gold+'44',background:`${C.gold}07` }}>
+          <div style={{ display:'flex',gap:11,alignItems:'flex-start' }}>
+            <Icon name="alert" size={16} color={C.gold}/>
+            <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.8 }}>
+              <b style={{ color:C.gold }}>Google is counting {Math.round(T.conversions)} conversions.
+              GoHighLevel recorded {gLeads} actual leads.</b> Google counts every tracked action — a call,
+              a form fill, a message — so one customer can register several. Its
+              <b> ${(T.costPerConv||0).toFixed(2)} "cost per conversion" is the optimistic number</b>;
+              your real cost per lead is {cpl!=null?fmt$(Math.round(cpl)):BLANK} and per booked job
+              {' '}{cpb!=null?fmt$(Math.round(cpb)):BLANK}. Judge the ads on those.
             </div>
           </div>
         </Card>
       )}
 
-      {adStatus==='ok' && ads && (()=>{
-        const T=ads.totals||{};
-        const g=(L.recent30&&L.recent30.bySource&&L.recent30.bySource.Google)||0;
-        const gb=(L.recent30&&L.recent30.bookedBySource&&L.recent30.bookedBySource.Google)||0;
-        const cpl=g?T.cost/g:null, cpb=gb?T.cost/gb:null;
-        const daily=(ads.daily||[]).map(d=>({ ...d, label:d.date.slice(5).replace('-','/') }));
-        return (
-          <>
-            <div style={{ display:'flex',alignItems:'center',gap:8,marginTop:4,marginBottom:12,flexWrap:'wrap' }}>
-              <h3 style={{ fontSize:15,fontWeight:700 }}>Google Ads · last {ads.windowDays||30} days</h3>
-              <span style={{ fontSize:11,color:C.textMuted }}>
-                {ads.accountName||'account'} · pushed {ads.updatedAt?fmtClock(ads.updatedAt):'—'}
-              </span>
-            </div>
-            <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:16 }} className="grid-resp">
-              <KPI label="Ad Spend" value={fmt$(T.cost||0)} icon="dollar" color={C.red} sub={`${(T.clicks||0).toLocaleString()} clicks`}/>
-              <KPI label="Avg CPC" value={'$'+(T.cpc||0).toFixed(2)} icon="chart" color={C.gold}
-                sub={T.ctr?T.ctr.toFixed(2)+'% CTR':''}/>
-              <KPI label="Conversions" value={Math.round(T.conversions||0).toLocaleString()} icon="check" color={C.green}
-                sub={T.costPerConv?'$'+T.costPerConv.toFixed(2)+' each':''}/>
-              <KPI label="Cost / Google Lead" value={cpl!=null?fmt$(Math.round(cpl)):BLANK} icon="users" color={C.cyan}
-                sub={g?`${g} leads in 30d`:'no Google leads in 30d'}/>
-              <KPI label="Cost / Booked Job" value={cpb!=null?fmt$(Math.round(cpb)):BLANK} icon="car" color={C.purple}
-                sub={gb?`${gb} booked in 30d`:'none booked yet'}/>
-            </div>
+      {/* traffic quality */}
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
+        <StatTile label="Clicks" value={(T.clicks||0).toLocaleString()} sub={`${(T.impressions||0).toLocaleString()} impressions`}/>
+        <StatTile label="Avg CPC" value={'$'+(T.cpc||0).toFixed(2)} sub="per click"/>
+        <StatTile label="Click-Through Rate" value={(T.ctr||0).toFixed(2)+'%'}
+          color={(T.ctr||0)>=5?C.green:C.text} sub="clicks ÷ impressions"/>
+        <StatTile label="Ad Conversions" value={Math.round(T.conversions||0).toLocaleString()}
+          sub={`$${(T.costPerConv||0).toFixed(2)} each · Google's count`}/>
+      </div>
 
-            <Card pad={20} style={{ marginBottom:16 }}>
-              <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Daily Ad Spend</h3>
-              <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>Cost per day, straight from the ads account</p>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={daily} margin={{ top:5,right:8,left:-18,bottom:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false}/>
-                  <XAxis dataKey="label" tick={{ fontSize:10 }} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
-                  <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+v}/>
-                  <RTooltip content={<ChartTip money/>} cursor={{ fill:'rgba(255,90,90,0.06)' }}/>
-                  <Bar dataKey="cost" name="Spend" fill={C.red} radius={[4,4,0,0]}/>
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
+      {/* spend trend */}
+      <Card pad={20} style={{ marginBottom:16 }}>
+        <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Daily Spend &amp; Clicks</h3>
+        <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>
+          Bars are dollars spent, the line is clicks — a day where spend climbs but clicks don't is
+          the one to look at.
+        </p>
+        <ResponsiveContainer width="100%" height={230}>
+          <AreaChart data={daily} margin={{ top:5,right:8,left:-18,bottom:0 }}>
+            <defs>
+              <linearGradient id="spendFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={C.red} stopOpacity={0.5}/>
+                <stop offset="100%" stopColor={C.red} stopOpacity={0.04}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+            <XAxis dataKey="label" tick={{ fontSize:10 }} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
+            <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+v}/>
+            <RTooltip content={<ChartTip/>} cursor={{ stroke:C.border }}/>
+            <Area type="monotone" dataKey="cost" name="Spend" stroke={C.red} strokeWidth={2} fill="url(#spendFill)"/>
+            <Area type="monotone" dataKey="clicks" name="Clicks" stroke={C.cyan} strokeWidth={1.5} fill="none"/>
+          </AreaChart>
+        </ResponsiveContainer>
+      </Card>
 
-            <Card pad={0} style={{ marginBottom:16,overflow:'hidden' }}>
-              <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
-                <h3 style={{ fontSize:15,fontWeight:700 }}>Campaigns</h3>
-                <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>Highest spend first</p>
-              </div>
-              <ReportTable
-                empty="No campaigns returned."
-                rows={ads.campaigns||[]}
-                cols={[
-                  { k:'campaign', label:'Campaign', strong:true },
-                  { k:'cost', label:'Spend', n:true, render:r=>fmt$(r.cost) },
-                  { k:'clicks', label:'Clicks', n:true, render:r=>r.clicks.toLocaleString() },
-                  { k:'cpc', label:'CPC', n:true, dim:true, render:r=>'$'+r.cpc.toFixed(2) },
-                  { k:'conversions', label:'Conv.', n:true, render:r=>Math.round(r.conversions) },
-                  { k:'costPerConv', label:'Cost/Conv', n:true, render:r=>r.costPerConv?fmt$(r.costPerConv):BLANK },
-                ]}/>
-            </Card>
-          </>
-        );
-      })()}
-    </>
+      {/* campaigns */}
+      <Card pad={0} style={{ marginBottom:16,overflow:'hidden' }}>
+        <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:15,fontWeight:700 }}>Campaigns</h3>
+          <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>Highest spend first</p>
+        </div>
+        <ReportTable
+          empty="No campaigns returned."
+          rows={ads.campaigns||[]}
+          cols={[
+            { k:'campaign', label:'Campaign', strong:true },
+            { k:'status', label:'Status', dim:true, render:r=>(
+              <span style={{ fontSize:10.5,fontWeight:700,letterSpacing:.5,
+                color:r.status==='ENABLED'?C.green:C.textMuted }}>{r.status}</span>) },
+            { k:'cost', label:'Spend', n:true, render:r=>fmt$(r.cost) },
+            { k:'clicks', label:'Clicks', n:true, render:r=>r.clicks.toLocaleString() },
+            { k:'cpc', label:'CPC', n:true, dim:true, render:r=>'$'+r.cpc.toFixed(2) },
+            { k:'conversions', label:'Conv.', n:true, render:r=>Math.round(r.conversions) },
+            { k:'costPerConv', label:'Cost/Conv', n:true, render:r=>r.costPerConv?'$'+r.costPerConv.toFixed(2):BLANK },
+          ]}/>
+      </Card>
+
+      {/* what is not here */}
+      <Card pad={16} style={{ marginBottom:20 }}>
+        <div style={{ display:'flex',gap:11,alignItems:'flex-start' }}>
+          <Icon name="alert" size={16} color={C.textDim}/>
+          <div style={{ fontSize:12,color:C.textDim,lineHeight:1.8 }}>
+            <b style={{ color:C.text }}>Local Services Ads are not in these numbers.</b> LSA is a
+            separate Google product that Ads scripts cannot read, so your real total ad spend is higher
+            than what you see here. Cost per lead is also an account-level average — GoHighLevel records
+            a lead's source but not which campaign produced it.
+          </div>
+        </div>
+      </Card>
+    </div>
   );
 }
-
 function Reports(){
   const { data, status, reload } = useGhlReports();
-  const { ads, status:adStatus } = useAdSpend();
   const pctOf=(a,b)=>b?Math.round(a/b*100):0;
 
   if(status==='loading') return (
@@ -2970,13 +3065,15 @@ function Reports(){
           </div>
         </div>
       </Card>
-      {/* Ad spend comes from a different source, so it still shows. */}
-      <AdSpendSection ads={ads} adStatus={adStatus} recent30={null}/>
     </div>
   );
 
   const L=data.leads, A=data.appointments, S=data.sources||[];
+  const R=L.recent30||{};
   const openValue=Math.round((L.valueByStatus&&L.valueByStatus.open)||0);
+  const cancelled=(A.byStatus&&A.byStatus.cancelled)||0;
+  const noShow=(A.byStatus&&A.byStatus['no-show'])||0;
+  const cancelRate=A.total?Math.round(cancelled/A.total*100):null;
   const apptStatusRows=Object.entries(A.byStatus||{}).map(([name,value])=>({name,value}))
     .sort((a,b)=>b.value-a.value);
   const techRows=Object.entries(A.byUser||{}).map(([name,count])=>({name,count}))
@@ -3003,19 +3100,35 @@ function Reports(){
         </Card>
       ))}
 
-      {/* headline numbers */}
-      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
+      {/* LAST 30 DAYS — the numbers worth checking daily, before the all-time ones */}
+      <div style={{ fontSize:11,color:C.textDim,fontWeight:700,letterSpacing:.7,
+        textTransform:'uppercase',marginBottom:9 }}>Last 30 days</div>
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:20 }} className="grid-resp">
+        <KPI label="New Leads" value={(R.leads||0).toLocaleString()} icon="users" color={C.cyan}
+          sub="created in the last 30 days"/>
+        <KPI label="Booked" value={(R.booked||0).toLocaleString()} icon="check" color={C.green}
+          sub={R.leads?Math.round((R.booked/R.leads)*100)+'% of new leads':'—'}/>
+        <KPI label="Upcoming Jobs" value={A.upcoming.toLocaleString()} icon="clock" color={C.cyanBright}
+          sub="on the calendar ahead"/>
+        <KPI label="Cancelled" value={cancelRate!=null?cancelRate+'%':BLANK} icon="alert"
+          color={cancelRate!=null&&cancelRate>15?C.red:C.gold}
+          sub={`${cancelled} of ${A.total} appointments`}/>
+        <KPI label="No-Shows" value={(noShow||0).toLocaleString()} icon="x"
+          color={noShow?C.red:C.textDim} sub="last 12 months"/>
+      </div>
+
+      {/* ALL TIME */}
+      <div style={{ fontSize:11,color:C.textDim,fontWeight:700,letterSpacing:.7,
+        textTransform:'uppercase',marginBottom:9 }}>All time</div>
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:20 }} className="grid-resp">
         <KPI label="Total Leads" value={L.total.toLocaleString()} icon="users" color={C.cyan}
           sub={L.read<L.total?`${L.read.toLocaleString()} read`:'all read'}/>
         <KPI label="Reached Booking" value={L.booked.toLocaleString()} icon="check" color={C.green}
           sub={Math.round(L.bookedRate*100)+'% of leads'}/>
         <KPI label="Open Pipeline" value={fmt$(openValue)} icon="dollar" color={C.gold} sub="value of open leads"/>
         <KPI label="Appointments" value={A.total.toLocaleString()} icon="calendar" color={C.purple} sub="last 12 months"/>
-        <KPI label="Upcoming" value={A.upcoming.toLocaleString()} icon="clock" color={C.cyanBright}
-          sub={A.users?`across ${A.users} users`:'scheduled'}/>
       </div>
 
-      <AdSpendSection ads={ads} adStatus={adStatus} recent30={L.recent30}/>
       {/* leads over time */}
       <Card pad={20} style={{ marginBottom:16 }}>
         <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Leads &amp; Bookings by Month</h3>
@@ -3122,12 +3235,11 @@ function Reports(){
         <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
           <Icon name="alert" size={17} color={C.textDim}/>
           <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.75 }}>
-            <b style={{ color:C.text }}>What these numbers can't tell you:</b> GoHighLevel tags each lead
-            with a source and medium but carries no campaign name, keyword or click id, so a lead cannot be
-            traced back to the specific campaign that produced it. Cost per lead above divides total spend
-            by Google-sourced leads over the same 30 days — it is an account-level average, not per campaign.
-            <b style={{ color:C.text }}> Local Services Ads spend is not included</b> either: LSA is a separate
-            product that Google Ads Scripts cannot read, so it needs its own feed.
+            <b style={{ color:C.text }}>How to read these:</b> conversion is measured by pipeline stage, not
+            status — 93% of opportunities sit at "open" because cards get moved between stages rather than
+            closed, so a status-based win rate would read near zero and mean nothing. GoHighLevel records a
+            lead's source but not the campaign behind it, so a lead can't be traced to a specific ad.
+            Ad spend and cost per lead live on the <b style={{ color:C.text }}>Ads</b> page.
           </div>
         </div>
       </Card>
@@ -3320,7 +3432,7 @@ function Topbar(){
   );
 }
 
-const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, ideas:Ideas, finance:Finance, goals:Goals, team:Team, reports:Reports, notifications:Notifications };
+const PAGES={ dashboard:Dashboard, schedule:Schedule, tasks:Tasks, ideas:Ideas, finance:Finance, goals:Goals, team:Team, ads:Ads, reports:Reports, notifications:Notifications };
 
 function CharacterSelect(){
   const { picked, chooseCharacter } = useApp();
