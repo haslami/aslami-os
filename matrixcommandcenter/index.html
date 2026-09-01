@@ -514,10 +514,23 @@ async function loadGHL(){
      job assigned to another tech — or to the second van — existed in GHL and
      appeared nowhere in the Command Center. */
   const userIds=(usersRes.users||[]).map(u=>u.id).filter(Boolean);
-  const ids=userIds.length?userIds:[GHL_USER];
-  const eventPages=await Promise.all(ids.map(id=>
-    ghlGet('/calendars/events',{ locationId:GHL_LOC, userId:id, startTime:winStart.getTime(), endTime:winEnd.getTime() })
-      .then(r=>r.events||[]).catch(()=>[])));
+  let eventPages;
+  if(userIds.length){
+    eventPages=await Promise.all(userIds.map(id=>
+      ghlGet('/calendars/events',{ locationId:GHL_LOC, userId:id, startTime:winStart.getTime(), endTime:winEnd.getTime() })
+        .then(r=>r.events||[]).catch(()=>[])));
+  } else {
+    /* The token has no users.readonly scope. Sweep every calendar instead, plus
+       the one known user id, rather than falling back to a single calendar. */
+    const cals=await ghlGet('/calendars/',{ locationId:GHL_LOC }).then(r=>r.calendars||[]).catch(()=>[]);
+    eventPages=await Promise.all([
+      ...cals.filter(c=>c.id).map(c=>
+        ghlGet('/calendars/events',{ locationId:GHL_LOC, calendarId:c.id, startTime:winStart.getTime(), endTime:winEnd.getTime() })
+          .then(r=>r.events||[]).catch(()=>[])),
+      ghlGet('/calendars/events',{ locationId:GHL_LOC, userId:GHL_USER, startTime:winStart.getTime(), endTime:winEnd.getTime() })
+        .then(r=>r.events||[]).catch(()=>[]),
+    ]);
+  }
   /* One appointment comes back under each user assigned to it. */
   const seenEv={}, events=[];
   eventPages.flat().forEach(e=>{ if(e&&e.id&&!seenEv[e.id]){ seenEv[e.id]=1; events.push(e); } });
@@ -2970,8 +2983,10 @@ function Reports(){
 
         <Card pad={0} style={{ overflow:'hidden' }}>
           <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
-            <h3 style={{ fontSize:15,fontWeight:700 }}>Appointments by Tech</h3>
-            <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>Every user, both vans — not just your own calendar</p>
+            <h3 style={{ fontSize:15,fontWeight:700 }}>Appointments by {A.users?'Tech':'Calendar'}</h3>
+            <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>
+              {A.users?'Every user, both vans — not just your own calendar'
+                      :'Grouped by calendar — the token cannot list techs yet'}</p>
           </div>
           <ReportTable
             empty="No appointments returned."

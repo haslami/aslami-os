@@ -13,6 +13,7 @@
 
 const GHL_BASE = 'https://services.leadconnectorhq.com';
 const LOCATION = '4oujU1ql0szJ60pb1xzk';
+const FALLBACK_USER = 'v1rBWcBX8nB2a3RwvpzR';   // used only when the token cannot list users
 const PAGE = 100;
 const MAX_PAGES = 25;            // 2,500 leads; beyond that we report the cap
 const WINDOW_DAYS = 365;
@@ -106,18 +107,38 @@ exports.handler = async (event) => {
     try {
       const u = await get('/users/', { locationId: LOCATION });
       users = (u.users || []).map(x => ({ id: x.id, name: x.name || x.firstName || 'User' }));
-    } catch (e) { warnings.push('Could not list users; appointments may be incomplete.'); }
+    } catch (e) {
+      // The token has no users.readonly scope, so the tech list is unavailable.
+      // Fall back to every calendar plus the one known user id — less complete
+      // than per-user, but far better than the single calendar we had before.
+      warnings.push('The GoHighLevel token cannot list users (needs the users.readonly scope), '
+        + 'so appointments are grouped by calendar instead of by tech.');
+    }
 
     const now = Date.now();
     const start = now - WINDOW_DAYS * 86400000, end = now + 90 * 86400000;
+    const seen = {};
+    const absorb = (list, label) => list.forEach(e => {
+      if (e && e.id && !seen[e.id]) { seen[e.id] = 1; appts.push({ ...e, _user: label }); }
+    });
+
     if (users.length) {
       const perUser = await Promise.all(users.map(u =>
         get('/calendars/events', { locationId: LOCATION, userId: u.id, startTime: start, endTime: end })
-          .then(r => (r.events || []).map(e => ({ ...e, _user: u.name })))
-          .catch(() => [])));
-      // The same appointment comes back under each assigned user, so de-duplicate.
-      const seen = {};
-      perUser.flat().forEach(e => { if (e.id && !seen[e.id]) { seen[e.id] = 1; appts.push(e); } });
+          .then(r => ({ name: u.name, events: r.events || [] })).catch(() => ({ name: u.name, events: [] }))));
+      // The same appointment comes back under each user assigned to it.
+      perUser.forEach(p => absorb(p.events, p.name));
+    } else {
+      const calRes = await get('/calendars/', { locationId: LOCATION }).catch(() => ({ calendars: [] }));
+      const cals = (calRes.calendars || []).filter(c => c.id);
+      const perCal = await Promise.all(cals.map(c =>
+        get('/calendars/events', { locationId: LOCATION, calendarId: c.id, startTime: start, endTime: end })
+          .then(r => ({ name: c.name || 'Calendar', events: r.events || [] }))
+          .catch(() => ({ name: c.name || 'Calendar', events: [] }))));
+      perCal.forEach(p => absorb(p.events, p.name));
+      const mine = await get('/calendars/events', { locationId: LOCATION, userId: FALLBACK_USER, startTime: start, endTime: end })
+        .then(r => r.events || []).catch(() => []);
+      absorb(mine, 'Unassigned / other');
     }
 
     const apptStatus = {}, apptMonth = {}, apptUser = {};
