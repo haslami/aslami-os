@@ -73,6 +73,11 @@ exports.handler = async (event) => {
     // between stages rather than closing them.
     const BOOKED = /booked|appointment|new booking|visit attended|sale|vip member|springfield/i;
 
+    // Ad spend arrives as a rolling 30-day window, so leads need a matching
+    // window or cost-per-lead compares 30 days of spend to a year of leads.
+    const since30 = Date.now() - 30 * 86400000;
+    const recent30 = { days: 30, leads: 0, booked: 0, bySource: {}, bookedBySource: {} };
+
     opps.forEach(o => {
       const st = (o.status || 'open').toLowerCase();
       tally(byStatus, st);
@@ -92,6 +97,11 @@ exports.handler = async (event) => {
         byMonth[mk] = byMonth[mk] || { month: mk, leads: 0, value: 0, booked: 0 };
         byMonth[mk].leads++; byMonth[mk].value += value;
         if (BOOKED.test(sName)) byMonth[mk].booked++;
+        if (created >= since30) {
+          recent30.leads++;
+          tally(recent30.bySource, src);
+          if (BOOKED.test(sName)) { recent30.booked++; tally(recent30.bookedBySource, src); }
+        }
       }
 
       const s = sourceStats[src] || (sourceStats[src] = { source: src, leads: 0, booked: 0, won: 0, value: 0 });
@@ -173,6 +183,7 @@ exports.handler = async (event) => {
           total, read: opps.length, byStatus, bySource, valueByStatus,
           byStage: stageRows, byMonth: sortedMonths, booked,
           bookedRate: opps.length ? booked / opps.length : 0,
+          recent30,
         },
         sources: sourceRows,
         pipelines: pipelineOrder,

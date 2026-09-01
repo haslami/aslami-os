@@ -2806,6 +2806,32 @@ function useGhlReports(){
 
 const RPT_COLORS=[C.green,C.gold,C.cyan,C.purple,C.orange,C.pink,C.red,C.cyanBright];
 
+/* Ad spend is pushed in by a Google Ads Script running inside the ads account —
+   the Ads API needs a developer token and a manager account, a script needs
+   neither. It lands in row 'google_ads' of the same table. */
+function useAdSpend(){
+  const [ads,setAds]=useState(null);
+  const [status,setStatus]=useState(supa?'loading':'off');
+  useEffect(()=>{
+    if(!supa){ setStatus('off'); return; }
+    let dead=false;
+    const pull=async()=>{
+      try{
+        const { data,error }=await supa.from(SUPA_TABLE).select('data,updated_at')
+          .eq('id','google_ads').maybeSingle();
+        if(dead) return;
+        if(error){ setStatus('error'); return; }
+        if(!data||!data.data){ setStatus('empty'); return; }
+        setAds({ ...data.data, updatedAt:Date.parse(data.updated_at)||null }); setStatus('ok');
+      }catch(e){ if(!dead) setStatus('error'); }
+    };
+    pull();
+    const iv=setInterval(pull,300000);
+    return ()=>{ dead=true; clearInterval(iv); };
+  },[]);
+  return { ads, status };
+}
+
 function ReportTable({ cols, rows, empty }){
   if(!rows.length) return <div style={{ padding:'22px 16px',textAlign:'center',color:C.textDim,fontSize:13 }}>{empty}</div>;
   return (
@@ -2830,8 +2856,97 @@ function ReportTable({ cols, rows, empty }){
   );
 }
 
+/* Ad spend renders on its own. It used to sit inside the GoHighLevel branch,
+   which meant a GHL hiccup would silently take the ad numbers down with it. */
+function AdSpendSection({ ads, adStatus, recent30 }){
+  const L={ recent30:recent30||{} };
+  return (
+    <>
+      {/* ---- Google Ads spend, pushed in by the Ads script ---- */}
+      {adStatus==='empty' && (
+        <Card pad={20} style={{ marginBottom:16,borderColor:C.gold+'44',background:`${C.gold}08` }}>
+          <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
+            <Icon name="alert" size={18} color={C.gold}/>
+            <div>
+              <div style={{ fontWeight:700,fontSize:14,color:C.gold,marginBottom:6 }}>Ad spend not connected yet</div>
+              <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.8 }}>
+                In Google Ads go to <b>Tools → Bulk actions → Scripts → + New script</b>, paste the
+                script from <code style={{ background:C.bg3,padding:'1px 6px',borderRadius:4,color:C.green }}>google-ads-script.js</code>,
+                authorize it, run it once, then schedule it <b>Daily</b>. Spend, clicks and cost per lead
+                appear here on the next run. No developer token or API approval needed.
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {adStatus==='ok' && ads && (()=>{
+        const T=ads.totals||{};
+        const g=(L.recent30&&L.recent30.bySource&&L.recent30.bySource.Google)||0;
+        const gb=(L.recent30&&L.recent30.bookedBySource&&L.recent30.bookedBySource.Google)||0;
+        const cpl=g?T.cost/g:null, cpb=gb?T.cost/gb:null;
+        const daily=(ads.daily||[]).map(d=>({ ...d, label:d.date.slice(5).replace('-','/') }));
+        return (
+          <>
+            <div style={{ display:'flex',alignItems:'center',gap:8,marginTop:4,marginBottom:12,flexWrap:'wrap' }}>
+              <h3 style={{ fontSize:15,fontWeight:700 }}>Google Ads · last {ads.windowDays||30} days</h3>
+              <span style={{ fontSize:11,color:C.textMuted }}>
+                {ads.accountName||'account'} · pushed {ads.updatedAt?fmtClock(ads.updatedAt):'—'}
+              </span>
+            </div>
+            <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:16 }} className="grid-resp">
+              <KPI label="Ad Spend" value={fmt$(T.cost||0)} icon="dollar" color={C.red} sub={`${(T.clicks||0).toLocaleString()} clicks`}/>
+              <KPI label="Avg CPC" value={'$'+(T.cpc||0).toFixed(2)} icon="chart" color={C.gold}
+                sub={T.ctr?T.ctr.toFixed(2)+'% CTR':''}/>
+              <KPI label="Conversions" value={Math.round(T.conversions||0).toLocaleString()} icon="check" color={C.green}
+                sub={T.costPerConv?'$'+T.costPerConv.toFixed(2)+' each':''}/>
+              <KPI label="Cost / Google Lead" value={cpl!=null?fmt$(Math.round(cpl)):BLANK} icon="users" color={C.cyan}
+                sub={g?`${g} leads in 30d`:'no Google leads in 30d'}/>
+              <KPI label="Cost / Booked Job" value={cpb!=null?fmt$(Math.round(cpb)):BLANK} icon="car" color={C.purple}
+                sub={gb?`${gb} booked in 30d`:'none booked yet'}/>
+            </div>
+
+            <Card pad={20} style={{ marginBottom:16 }}>
+              <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Daily Ad Spend</h3>
+              <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>Cost per day, straight from the ads account</p>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={daily} margin={{ top:5,right:8,left:-18,bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+                  <XAxis dataKey="label" tick={{ fontSize:10 }} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
+                  <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+v}/>
+                  <RTooltip content={<ChartTip money/>} cursor={{ fill:'rgba(255,90,90,0.06)' }}/>
+                  <Bar dataKey="cost" name="Spend" fill={C.red} radius={[4,4,0,0]}/>
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+
+            <Card pad={0} style={{ marginBottom:16,overflow:'hidden' }}>
+              <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
+                <h3 style={{ fontSize:15,fontWeight:700 }}>Campaigns</h3>
+                <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>Highest spend first</p>
+              </div>
+              <ReportTable
+                empty="No campaigns returned."
+                rows={ads.campaigns||[]}
+                cols={[
+                  { k:'campaign', label:'Campaign', strong:true },
+                  { k:'cost', label:'Spend', n:true, render:r=>fmt$(r.cost) },
+                  { k:'clicks', label:'Clicks', n:true, render:r=>r.clicks.toLocaleString() },
+                  { k:'cpc', label:'CPC', n:true, dim:true, render:r=>'$'+r.cpc.toFixed(2) },
+                  { k:'conversions', label:'Conv.', n:true, render:r=>Math.round(r.conversions) },
+                  { k:'costPerConv', label:'Cost/Conv', n:true, render:r=>r.costPerConv?fmt$(r.costPerConv):BLANK },
+                ]}/>
+            </Card>
+          </>
+        );
+      })()}
+    </>
+  );
+}
+
 function Reports(){
   const { data, status, reload } = useGhlReports();
+  const { ads, status:adStatus } = useAdSpend();
   const pctOf=(a,b)=>b?Math.round(a/b*100):0;
 
   if(status==='loading') return (
@@ -2855,6 +2970,8 @@ function Reports(){
           </div>
         </div>
       </Card>
+      {/* Ad spend comes from a different source, so it still shows. */}
+      <AdSpendSection ads={ads} adStatus={adStatus} recent30={null}/>
     </div>
   );
 
@@ -2898,6 +3015,7 @@ function Reports(){
           sub={A.users?`across ${A.users} users`:'scheduled'}/>
       </div>
 
+      <AdSpendSection ads={ads} adStatus={adStatus} recent30={L.recent30}/>
       {/* leads over time */}
       <Card pad={20} style={{ marginBottom:16 }}>
         <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Leads &amp; Bookings by Month</h3>
@@ -3004,11 +3122,12 @@ function Reports(){
         <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
           <Icon name="alert" size={17} color={C.textDim}/>
           <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.75 }}>
-            <b style={{ color:C.text }}>On Google Ads spend:</b> these numbers are the lead side only.
-            GoHighLevel tags each lead with a source and medium but carries no campaign name, keyword or
-            click id, so cost per lead and campaign performance cannot be derived here — you can see that
-            Google sent the lead and what happened to it, not what it cost. That needs the Google Ads
-            account connected directly.
+            <b style={{ color:C.text }}>What these numbers can't tell you:</b> GoHighLevel tags each lead
+            with a source and medium but carries no campaign name, keyword or click id, so a lead cannot be
+            traced back to the specific campaign that produced it. Cost per lead above divides total spend
+            by Google-sourced leads over the same 30 days — it is an account-level average, not per campaign.
+            <b style={{ color:C.text }}> Local Services Ads spend is not included</b> either: LSA is a separate
+            product that Google Ads Scripts cannot read, so it needs its own feed.
           </div>
         </div>
       </Card>
