@@ -180,6 +180,7 @@ svg.chart{display:block;width:100%;height:auto;min-width:520px}
     <button class="nav" data-v="payroll"><i>◉</i>Payroll</button>
     <button class="nav" data-v="jobs"><i>▤</i>Jobs</button>
     <button class="nav" data-v="spend"><i>◈</i>Spend</button>
+    <button class="nav" data-v="months"><i>▦</i>Months</button>
     <button class="nav" data-v="year"><i>◪</i>Year</button>
     <button class="nav" data-v="setup"><i>⚙</i>Setup</button>
     <span class="spacer"></span>
@@ -196,6 +197,7 @@ svg.chart{display:block;width:100%;height:auto;min-width:520px}
     <section class="view" id="v-payroll" hidden></section>
     <section class="view" id="v-jobs" hidden></section>
     <section class="view" id="v-spend" hidden></section>
+    <section class="view" id="v-months" hidden></section>
     <section class="view" id="v-year" hidden></section>
     <section class="view" id="v-setup" hidden></section>
   </main>
@@ -391,15 +393,45 @@ function monthlySeries(rows){
   /* PP01 opens on 29 Dec 2025 but the book it came from calls that January, and
      so does the Year view. Fold those three days forward rather than putting a
      stray "Dec" bar in front of a 2026 chart. */
-  const m={}, addM=(k,v)=>{ if(k<"2026-01") k="2026-01"; m[k]=(m[k]||0)+v; };
+  const key=k=>k<"2026-01"?"2026-01":k;
+  const m={};
+  const bucket=k=>{ k=key(k); return m[k]||(m[k]={revenue:0,labor:0,opex:0,net:0,jobs:0,tips:0}); };
   const liveIds={}; rows.forEach(r=>{ if(r.live) liveIds[r.id]=1; });
+
+  /* Live revenue is exact — every job carries its own date. Remember how each
+     period's revenue split across months, so that period's costs can follow the
+     same shape instead of being smeared evenly. */
+  const split={};
   S.jobs.forEach(j=>{ if(j.status!=="Completed") return;
     const p=periodOf(j.date); if(!p||!liveIds[p.id]) return;
-    addM(String(j.date).slice(0,7), num(j.price)); });
-  rows.filter(r=>!r.live&&r.revenue).forEach(r=>{
-    const s=toUTC(r.start), e=toUTC(r.end), days=Math.max(1,Math.round((e-s)/DAY)+1);
-    for(let i=0;i<days;i++) addM(new Date(s+i*DAY).toISOString().slice(0,7), r.revenue/days); });
-  return Object.keys(m).sort().map(k=>({monthKey:k, month:MN[+k.slice(5,7)-1], revenue:Math.round(m[k])}));
+    const k=key(String(j.date).slice(0,7)), b=bucket(k);
+    b.revenue+=num(j.price); b.tips+=num(j.tip); b.jobs++;
+    (split[p.id]||(split[p.id]={}))[k]=(split[p.id][k]||0)+num(j.price); });
+
+  const byDay=(r,fn)=>{ const s=toUTC(r.start), e=toUTC(r.end),
+    days=Math.max(1,Math.round((e-s)/DAY)+1);
+    for(let i=0;i<days;i++) fn(key(new Date(s+i*DAY).toISOString().slice(0,7)), 1/days); };
+
+  /* Labor, spend and net are period-level facts — a fortnight straddles two
+     months. Weight them by where that period actually earned. NET is prorated
+     rather than recomputed, which is what keeps the months adding up to exactly
+     the year total instead of drifting by a few dollars of rounding. */
+  rows.forEach(r=>{
+    const sp = r.live ? split[r.id] : null;
+    const tot = sp ? Object.keys(sp).reduce((a,k)=>a+sp[k],0) : 0;
+    const put = (k,w)=>{ const b=bucket(k);
+      b.labor+=r.labor*w; b.opex+=r.opex*w; b.net+=r.net*w;
+      if(!r.live){ b.revenue+=r.revenue*w; b.jobs+=r.jobs*w; } };
+    if(tot>0) Object.keys(sp).forEach(k=>put(k, sp[k]/tot));
+    else byDay(r,put);
+  });
+
+  return Object.keys(m).sort().map(k=>{ const b=m[k];
+    return {monthKey:k, month:MN[+k.slice(5,7)-1],
+      revenue:r2(b.revenue), labor:r2(b.labor), opex:r2(b.opex), net:r2(b.net),
+      jobs:Math.round(b.jobs), tips:r2(b.tips),
+      netPct: b.revenue ? b.net/b.revenue : null,
+      laborPct: b.revenue ? b.labor/b.revenue : null}; });
 }
 
 /* Push. Throws on refusal so cloudSave's existing retry/backoff handles it. */
@@ -687,7 +719,7 @@ function plan(p){
 
 /* ---------------- ui ---------------- */
 let CUR=(periodOf(todayISO())||PERIODS[15]).id, VIEW="period";
-const TITLES={period:"Pay period",moves:"Money moves",payroll:"Payroll",jobs:"Jobs",spend:"Spend",year:"Year",setup:"Setup"};
+const TITLES={period:"Pay period",moves:"Money moves",payroll:"Payroll",jobs:"Jobs",spend:"Spend",months:"Monthly report",year:"Year",setup:"Setup"};
 function fillPeriods(){
   $("#periodSel").innerHTML=PERIODS.map(p=>{const t=totals(p.id);
     return `<option value="${p.id}"${p.id===CUR?" selected":""}>${esc(p.label)}${(t.jobs||t.opex)?"":"  ·  empty"}</option>`;}).join("");
@@ -1164,6 +1196,89 @@ function renderSpend(){
     S.spend[CUR]=Object.assign({},prev); save(); renderSpend(); toast("Copied from "+PERIODS[i-1].id+" — now adjust it.");});
 }
 
+
+/* ---- MONTHS ---- */
+function renderMonths(){
+  const sum=ledgerSummary();
+  const ms=sum.monthly, y=sum.year;
+  $("#viewSub").textContent="2026 · revenue and net income by calendar month";
+  if(!ms.length){ $("#v-months").innerHTML=`<div class="card"><div class="empty">Nothing logged yet.</div></div>`; return; }
+
+  const best=ms.reduce((a,b)=>b.revenue>a.revenue?b:a);
+  const worst=ms.reduce((a,b)=>b.net<a.net?b:a);
+  const avg=r2(ms.reduce((a,b)=>a+b.revenue,0)/ms.length);
+  const maxRev=Math.max(...ms.map(m=>m.revenue),1);
+  const maxAbsNet=Math.max(...ms.map(m=>Math.abs(m.net)),1);
+
+  $("#v-months").innerHTML=`
+    <div class="kpis">
+      ${kpi("Best month",money0(best.revenue),best.month+" · "+money0(best.net)+" net","pos")}
+      ${kpi("Average month",money0(avg),ms.length+" months so far")}
+      ${kpi("Year revenue",money0(y.revenue),"all months added up")}
+      ${kpi("Year net",money0(y.net),pct(y.netPct)+" margin",y.net<0?"neg":"pos")}
+      ${worst.net<0?kpi("Worst month",money0(worst.net),worst.month+" lost money","neg"):""}
+    </div>
+
+    <div class="card"><h2>Revenue by month</h2>
+      <p class="sub">Green is what came in. The bar underneath is what you kept.</p>
+      ${ms.map(m=>`<div style="margin-bottom:.7rem">
+        <div class="spendrow" style="grid-template-columns:3.2rem 1fr 7rem 6rem;align-items:baseline">
+          <span style="font-weight:700">${esc(m.month)}</span>
+          <span class="track" style="margin:0"><span class="fill" style="width:${(m.revenue/maxRev*100).toFixed(1)}%"></span></span>
+          <span class="pc mono" style="text-align:right">${money0(m.revenue)}</span>
+          <span class="pc mono" style="text-align:right;color:${m.net<0?"var(--neg)":"var(--pos)"}">
+            ${money0(m.net)} net</span>
+        </div>
+        <div class="spendrow" style="grid-template-columns:3.2rem 1fr 7rem 6rem;margin-top:-.35rem">
+          <span></span>
+          <span class="track" style="margin:0;background:none">
+            <span class="fill" style="width:${(Math.abs(m.net)/maxAbsNet*100).toFixed(1)}%;
+              background:${m.net<0?"var(--neg)":"var(--pos)"};opacity:.55"></span></span>
+          <span class="pc">${m.jobs||"—"} jobs</span>
+          <span class="pc" style="text-align:right">${m.netPct!=null?pct(m.netPct):"—"} margin</span>
+        </div></div>`).join("")}
+    </div>
+
+    <div class="card"><h2>Every month, in full</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Month</th><th class="n">Jobs</th><th class="n">Revenue</th><th class="n">Tips</th>
+          <th class="n">Labor</th><th class="n">Labor %</th><th class="n">Spend</th>
+          <th class="n">Net</th><th class="n">Margin</th></tr></thead>
+        <tbody>${ms.map(m=>`<tr>
+          <td><b>${esc(m.month)}</b> <span class="hint">${esc(m.monthKey)}</span></td>
+          <td class="n">${m.jobs||"—"}</td>
+          <td class="n">${money0(m.revenue)}</td>
+          <td class="n">${m.tips?money0(m.tips):"—"}</td>
+          <td class="n">${money0(m.labor)}</td>
+          <td class="n" style="color:${m.laborPct>0.55?"var(--neg)":m.laborPct>0.5?"var(--warn)":"inherit"}">
+            ${m.laborPct!=null?pct(m.laborPct):"—"}</td>
+          <td class="n">${money0(m.opex)}</td>
+          <td class="n" style="color:${m.net<0?"var(--neg)":"var(--pos)"}"><b>${money0(m.net)}</b></td>
+          <td class="n">${m.netPct!=null?pct(m.netPct):"—"}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td>2026</td><td class="n">${y.jobs}</td><td class="n">${money0(y.revenue)}</td>
+          <td class="n">${money0(y.tips)}</td><td class="n">${money0(y.labor)}</td>
+          <td class="n">${pct(y.laborPct)}</td><td class="n">${money0(y.opex)}</td>
+          <td class="n"><b>${money0(y.net)}</b></td><td class="n">${pct(y.netPct)}</td></tr></tfoot>
+      </table></div>
+      <div class="bar"><button class="sm" id="copyMonths">Copy this table</button></div>
+      <p class="hint" style="margin-top:.6rem">Your pay periods are fortnights, so most of them straddle two
+        months. Revenue is placed by the <b>date on each job</b>, which is exact. Labor and spend are period
+        totals, so they are split across the months in the same proportion as that period's revenue — and
+        net is split the same way, which is why the months add up to the year exactly rather than drifting.
+        ${y.mixed?`Months before you started logging jobs are prorated across the pay period by day, and
+        their revenue still includes tips, because that is how the old workbook counted.`:""}</p>
+    </div>`;
+
+  const c=$("#copyMonths");
+  if(c) c.addEventListener("click",()=>{
+    const L=["Month\tJobs\tRevenue\tTips\tLabor\tSpend\tNet\tMargin"]
+      .concat(ms.map(m=>[m.month,m.jobs,m.revenue,m.tips,m.labor,m.opex,m.net,
+        m.netPct!=null?(m.netPct*100).toFixed(1)+"%":""].join("\t")))
+      .concat(["2026 total\t"+y.jobs+"\t"+y.revenue+"\t"+y.tips+"\t"+y.labor+"\t"+y.opex+"\t"+y.net]);
+    navigator.clipboard&&navigator.clipboard.writeText(L.join("\n"))
+      .then(()=>toast("Copied — paste into a sheet."),()=>toast("Copy blocked."));});
+}
+
 /* ---- YEAR ---- */
 function renderYear(){
   $("#viewSub").textContent="2026 · year to date";
@@ -1477,11 +1592,11 @@ function loadSample(){
 function renderAll(){
   fillPeriods();
   ({period:renderPeriod,moves:renderMoves,payroll:renderPayroll,jobs:renderJobs,
-    spend:renderSpend,year:renderYear,setup:renderSetup})[VIEW]();
+    spend:renderSpend,months:renderMonths,year:renderYear,setup:renderSetup})[VIEW]();
   paintSync();
 }
 fillPeriods(); renderAll();
-let rz=null; addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(()=>{if(VIEW==="year")renderYear();},220);});
+let rz=null; addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(()=>{if(VIEW==="year")renderYear(); if(VIEW==="months")renderMonths();},220);});
 </script>
 </script>
 
