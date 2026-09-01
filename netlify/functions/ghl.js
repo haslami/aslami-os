@@ -9,6 +9,7 @@ const ALLOWED = [
   '/opportunities/search',
   '/opportunities/pipelines',
   '/contacts/',
+  '/users/',            // needed to pull appointments for every tech, not just one
 ];
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS' };

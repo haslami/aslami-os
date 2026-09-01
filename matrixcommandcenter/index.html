@@ -503,19 +503,31 @@ async function loadGHL(){
   const winStart=new Date(now); winStart.setDate(winStart.getDate()-60);
   const winEnd=new Date(now); winEnd.setDate(winEnd.getDate()+60);
 
-  const [eventsRes, oppRes, pipeRes, contactRes] = await Promise.all([
-    ghlGet('/calendars/events',{ locationId:GHL_LOC, userId:GHL_USER, startTime:winStart.getTime(), endTime:winEnd.getTime() }).catch(()=>({events:[]})),
+  const [usersRes, oppRes, pipeRes, contactRes] = await Promise.all([
+    ghlGet('/users/',{ locationId:GHL_LOC }).catch(()=>({users:[]})),
     ghlGet('/opportunities/search',{ location_id:GHL_LOC, limit:100 }).catch(()=>({opportunities:[]})),
     ghlGet('/opportunities/pipelines',{ locationId:GHL_LOC }).catch(()=>({pipelines:[]})),
     ghlGet('/contacts/',{ locationId:GHL_LOC, limit:100 }).catch(()=>({contacts:[]})),
   ]);
+
+  /* Appointments must be pulled for EVERY user. This asked for one userId, so a
+     job assigned to another tech — or to the second van — existed in GHL and
+     appeared nowhere in the Command Center. */
+  const userIds=(usersRes.users||[]).map(u=>u.id).filter(Boolean);
+  const ids=userIds.length?userIds:[GHL_USER];
+  const eventPages=await Promise.all(ids.map(id=>
+    ghlGet('/calendars/events',{ locationId:GHL_LOC, userId:id, startTime:winStart.getTime(), endTime:winEnd.getTime() })
+      .then(r=>r.events||[]).catch(()=>[])));
+  /* One appointment comes back under each user assigned to it. */
+  const seenEv={}, events=[];
+  eventPages.flat().forEach(e=>{ if(e&&e.id&&!seenEv[e.id]){ seenEv[e.id]=1; events.push(e); } });
 
   const contactMap={};
   (contactRes.contacts||[]).forEach(c=>{ contactMap[c.id]=c; });
   const stageMap={};
   (pipeRes.pipelines||[]).forEach(p=>(p.stages||[]).forEach(s=>{ stageMap[s.id]=s.name; }));
 
-  const appts=(eventsRes.events||[]).map(ev=>mapEvent(ev,contactMap));
+  const appts=events.map(ev=>mapEvent(ev,contactMap));
   const leads=(oppRes.opportunities||[]).map(op=>mapOpportunity(op,stageMap));
 
   return { appts, leads, contactCount:(contactRes.meta&&contactRes.meta.total)||contactRes.contacts&&contactRes.contacts.length||0 };
@@ -2758,91 +2770,233 @@ function Notifications(){
 /* ============================================================
    REPORTS
    ============================================================ */
+/* ============================================================
+   REPORTS — live GoHighLevel reporting, read-only
+   Nothing here writes back to GHL. The aggregation happens in
+   /.netlify/functions/ghl-reports because the location holds ~1,400
+   opportunities: the old page read one page of 100 and drew conclusions from it.
+   ============================================================ */
+function useGhlReports(){
+  const [data,setData]=useState(null);
+  const [status,setStatus]=useState('loading');
+  const load=useCallback(()=>{
+    setStatus(s=>s==='ok'?'ok':'loading');
+    fetch('/.netlify/functions/ghl-reports')
+      .then(r=>r.json())
+      .then(d=>{ if(d.error){ setStatus('error'); setData({error:d.error}); return; }
+        setData(d); setStatus('ok'); })
+      .catch(e=>{ setData({error:e.message}); setStatus('error'); });
+  },[]);
+  useEffect(()=>{ load(); },[load]);
+  return { data, status, reload:load };
+}
+
+const RPT_COLORS=[C.green,C.gold,C.cyan,C.purple,C.orange,C.pink,C.red,C.cyanBright];
+
+function ReportTable({ cols, rows, empty }){
+  if(!rows.length) return <div style={{ padding:'22px 16px',textAlign:'center',color:C.textDim,fontSize:13 }}>{empty}</div>;
+  return (
+    <div style={{ overflowX:'auto' }}>
+      <table style={{ width:'100%',borderCollapse:'collapse',fontSize:13 }}>
+        <thead>
+          <tr>{cols.map(c=>(
+            <th key={c.k} style={{ textAlign:c.n?'right':'left',padding:'8px 12px',color:C.textDim,
+              fontSize:10.5,fontWeight:700,letterSpacing:.6,textTransform:'uppercase',
+              borderBottom:`1px solid ${C.border}`,whiteSpace:'nowrap' }}>{c.label}</th>))}</tr>
+        </thead>
+        <tbody>
+          {rows.map((r,i)=>(
+            <tr key={i}>{cols.map(c=>(
+              <td key={c.k} style={{ textAlign:c.n?'right':'left',padding:'9px 12px',
+                borderBottom:`1px solid ${C.border}22`,color:c.dim?C.textDim:C.text,
+                fontWeight:c.strong?700:400,whiteSpace:'nowrap' }}>{c.render?c.render(r):r[c.k]}</td>))}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Reports(){
-  const { toast, appts, leads } = useApp();
-  const [from,setFrom]=useState(addDays(TODAY,-30));
-  const [to,setTo]=useState(TODAY);
-  const live=(appts||[]).filter(a=>a.status!=='cancelled');
-  const bd=serviceBreakdown(live);
-  const monthly=revMonthly(live);
-  const wonCount=(leads||[]).filter(l=>l.stage==='won').length;
-  const totalLeads=(leads||[]).length;
-  const closeRate=totalLeads?Math.round(wonCount/totalLeads*100)+'% close':BLANK;
-  const rangeRev=sumRange(live,from,to);
-  const reports=[
-    { title:'Revenue Report', desc:'Daily/weekly/monthly breakdown from booked jobs', icon:'dollar', color:C.green, stat:rangeRev>0?fmt$(rangeRev):BLANK },
-    { title:'Lead Conversion', desc:'Pipeline, sources & win rate analysis', icon:'zap', color:C.gold, stat:closeRate },
-    { title:'Service Performance', desc:'Revenue & margin by service category', icon:'chart', color:C.cyan, stat:bd.length?bd.length+' services':BLANK },
-    { title:'Customer Retention', desc:'Repeat rate, churn & lifetime value', icon:'users', color:C.purple, stat:BLANK },
-  ];
-  const lineData=monthly.map(m=>({ month:m.month, revenue:m.revenue }));
+  const { data, status, reload } = useGhlReports();
+  const pctOf=(a,b)=>b?Math.round(a/b*100):0;
+
+  if(status==='loading') return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Reports" sub="Live from GoHighLevel"/>
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14 }} className="grid-resp">
+        {[1,2,3,4,5].map(i=><div key={i} style={{ height:118,borderRadius:12,background:C.panel }} className="pulse-soft"/>)}
+      </div>
+    </div>
+  );
+
+  if(status==='error') return (
+    <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
+      <PageHead title="Reports" sub="Live from GoHighLevel"/>
+      <Card pad={18} style={{ borderColor:C.red+'44',background:`${C.red}08` }}>
+        <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
+          <Icon name="alert" size={18} color={C.red}/>
+          <div style={{ fontSize:13,color:C.text }}>
+            Couldn't build the GoHighLevel reports{data&&data.error?': '+data.error:'.'}
+            <div style={{ marginTop:10 }}><Btn variant="soft" onClick={reload}>Try again</Btn></div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+
+  const L=data.leads, A=data.appointments, S=data.sources||[];
+  const openValue=Math.round((L.valueByStatus&&L.valueByStatus.open)||0);
+  const apptStatusRows=Object.entries(A.byStatus||{}).map(([name,value])=>({name,value}))
+    .sort((a,b)=>b.value-a.value);
+  const techRows=Object.entries(A.byUser||{}).map(([name,count])=>({name,count}))
+    .sort((a,b)=>b.count-a.count);
+  const monthRows=(L.byMonth||[]).map(m=>({ ...m, label:m.month.slice(5)+'/'+m.month.slice(2,4) }));
 
   return (
     <div className="fade-in main-pad" style={{ padding:'26px 30px',overflowY:'auto',flex:1 }}>
-      <PageHead title="Reports" sub="Generate & export business intelligence"/>
+      <PageHead title="Reports" sub="Live from GoHighLevel"/>
 
-      <Card pad={16} style={{ display:'flex',alignItems:'center',gap:14,marginBottom:18,flexWrap:'wrap' }}>
-        <Icon name="calendar" size={18} color={C.cyan}/>
-        <span style={{ fontSize:13,color:C.textDim,fontWeight:600 }}>Date Range:</span>
-        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{ width:'auto' }}/>
-        <span style={{ color:C.textDim }}>→</span>
-        <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{ width:'auto' }}/>
-        <div style={{ marginLeft:'auto',display:'flex',gap:10 }}>
-          <Btn variant="ghost" icon="download" onClick={()=>toast('Exported to PDF')}>PDF</Btn>
-          <Btn variant="soft" icon="download" onClick={()=>toast('Exported to Excel')}>Excel</Btn>
-        </div>
+      <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:14,flexWrap:'wrap' }}>
+        <span style={{ display:'flex',alignItems:'center',gap:5,fontSize:11,color:C.green,
+          background:`${C.green}18`,padding:'2px 9px',borderRadius:20,fontWeight:600 }}>
+          <span style={{ width:6,height:6,borderRadius:'50%',background:C.green }}/>Live · GoHighLevel
+        </span>
+        <span style={{ fontSize:11,color:C.textMuted }}>read-only · built {fmtClock(data.builtAt)}</span>
+        <span style={{ marginLeft:'auto' }}><Btn variant="ghost" icon="chart" onClick={reload}>Refresh</Btn></span>
+      </div>
+
+      {(data.warnings||[]).map((w,i)=>(
+        <Card key={i} pad={13} style={{ marginBottom:12,borderColor:C.gold+'33',background:`${C.gold}07`,
+          fontSize:12.5,color:C.textDim,display:'flex',gap:9,alignItems:'center' }}>
+          <Icon name="alert" size={15} color={C.gold}/>{w}
+        </Card>
+      ))}
+
+      {/* headline numbers */}
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
+        <KPI label="Total Leads" value={L.total.toLocaleString()} icon="users" color={C.cyan}
+          sub={L.read<L.total?`${L.read.toLocaleString()} read`:'all read'}/>
+        <KPI label="Reached Booking" value={L.booked.toLocaleString()} icon="check" color={C.green}
+          sub={Math.round(L.bookedRate*100)+'% of leads'}/>
+        <KPI label="Open Pipeline" value={fmt$(openValue)} icon="dollar" color={C.gold} sub="value of open leads"/>
+        <KPI label="Appointments" value={A.total.toLocaleString()} icon="calendar" color={C.purple} sub="last 12 months"/>
+        <KPI label="Upcoming" value={A.upcoming.toLocaleString()} icon="clock" color={C.cyanBright}
+          sub={A.users?`across ${A.users} users`:'scheduled'}/>
+      </div>
+
+      {/* leads over time */}
+      <Card pad={20} style={{ marginBottom:16 }}>
+        <h3 style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>Leads &amp; Bookings by Month</h3>
+        <p style={{ fontSize:12,color:C.textDim,marginBottom:14 }}>
+          Green is leads that reached a booking stage. Status is not used — nearly every lead sits at
+          "open" because cards get moved between stages rather than closed.
+        </p>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={monthRows} margin={{ top:5,right:8,left:-18,bottom:0 }}>
+            <CartesianGrid strokeDasharray="3 3" vertical={false}/>
+            <XAxis dataKey="label" tick={{ fontSize:11 }} axisLine={false} tickLine={false}/>
+            <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false}/>
+            <RTooltip content={<ChartTip/>} cursor={{ fill:'rgba(31,197,106,0.06)' }}/>
+            <Legend wrapperStyle={{ fontSize:11 }}/>
+            <Bar dataKey="leads" name="Leads" fill={C.cyanDim} stroke={C.cyan} radius={[4,4,0,0]}/>
+            <Bar dataKey="booked" name="Booked" fill={C.green} radius={[4,4,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
       </Card>
 
-      <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14,marginBottom:18 }} className="grid-resp">
-        {reports.map(r=>(
-          <Card key={r.title} pad={18} hover onClick={()=>toast(`Generating ${r.title}...`,'info')}>
-            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12 }}>
-              <div style={{ width:40,height:40,borderRadius:11,background:`${r.color}1c`,display:'grid',placeItems:'center' }}>
-                <Icon name={r.icon} size={19} color={r.color}/>
+      {/* sources + conversion */}
+      <Card pad={0} style={{ marginBottom:16,overflow:'hidden' }}>
+        <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:15,fontWeight:700 }}>Lead Source &amp; Conversion</h3>
+          <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>Where leads come from and how many reach a booking</p>
+        </div>
+        <ReportTable
+          empty="No lead sources returned."
+          rows={S.slice(0,12)}
+          cols={[
+            { k:'source', label:'Source', strong:true },
+            { k:'leads', label:'Leads', n:true, render:r=>r.leads.toLocaleString() },
+            { k:'booked', label:'Booked', n:true, render:r=>r.booked.toLocaleString() },
+            { k:'bookedRate', label:'Rate', n:true, render:r=>(
+              <span style={{ color:r.bookedRate>=0.3?C.green:r.bookedRate>=0.1?C.gold:C.textDim,fontWeight:700 }}>
+                {Math.round(r.bookedRate*100)}%
+              </span>) },
+            { k:'value', label:'Value', n:true, render:r=>fmt$(r.value) },
+          ]}/>
+      </Card>
+
+      {/* pipeline stages */}
+      <Card pad={0} style={{ marginBottom:16,overflow:'hidden' }}>
+        <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:15,fontWeight:700 }}>Pipeline Stages</h3>
+          <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>Every stage across your pipelines, biggest first</p>
+        </div>
+        <ReportTable
+          empty="No pipeline stages returned."
+          rows={(L.byStage||[]).slice(0,16)}
+          cols={[
+            { k:'stage', label:'Pipeline · Stage', strong:true },
+            { k:'count', label:'Leads', n:true, render:r=>r.count.toLocaleString() },
+            { k:'share', label:'Share', n:true, dim:true, render:r=>pctOf(r.count,L.read)+'%' },
+            { k:'value', label:'Value', n:true, render:r=>fmt$(r.value) },
+          ]}/>
+      </Card>
+
+      {/* appointments */}
+      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16 }} className="grid-resp">
+        <Card pad={20}>
+          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>Appointments by Outcome</h3>
+          <ResponsiveContainer width="100%" height={210}>
+            <PieChart>
+              <Pie data={apptStatusRows} dataKey="value" nameKey="name" cx="50%" cy="50%"
+                innerRadius={50} outerRadius={82} paddingAngle={2} stroke="none">
+                {apptStatusRows.map((e,i)=><Cell key={i} fill={RPT_COLORS[i%RPT_COLORS.length]}/>)}
+              </Pie>
+              <RTooltip content={<ChartTip/>}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display:'flex',flexDirection:'column',gap:7,marginTop:10 }}>
+            {apptStatusRows.map((e,i)=>(
+              <div key={e.name} style={{ display:'flex',alignItems:'center',gap:8,fontSize:12.5 }}>
+                <span style={{ width:9,height:9,borderRadius:2,background:RPT_COLORS[i%RPT_COLORS.length] }}/>
+                <span style={{ flex:1,color:C.textDim,textTransform:'capitalize' }}>{e.name}</span>
+                <span style={{ fontWeight:700 }}>{e.value}</span>
+                <span style={{ color:C.textMuted,minWidth:38,textAlign:'right' }}>{pctOf(e.value,A.total)}%</span>
               </div>
-              <span style={{ fontSize:15,fontWeight:800,color:r.color }}>{r.stat}</span>
-            </div>
-            <div style={{ fontSize:15,fontWeight:700,marginBottom:5 }}>{r.title}</div>
-            <p style={{ fontSize:12.5,color:C.textDim,lineHeight:1.45 }}>{r.desc}</p>
-            <div style={{ display:'flex',gap:8,marginTop:14 }}>
-              <Btn size="sm" variant="ghost" icon="download" onClick={e=>{e.stopPropagation();toast('Exported to PDF');}}>PDF</Btn>
-              <Btn size="sm" variant="dark" icon="download" onClick={e=>{e.stopPropagation();toast('Exported to Excel');}}>Excel</Btn>
-            </div>
-          </Card>
-        ))}
+            ))}
+          </div>
+        </Card>
+
+        <Card pad={0} style={{ overflow:'hidden' }}>
+          <div style={{ padding:'14px 20px',borderBottom:`1px solid ${C.border}` }}>
+            <h3 style={{ fontSize:15,fontWeight:700 }}>Appointments by Tech</h3>
+            <p style={{ fontSize:11.5,color:C.textDim,marginTop:2 }}>Every user, both vans — not just your own calendar</p>
+          </div>
+          <ReportTable
+            empty="No appointments returned."
+            rows={techRows}
+            cols={[
+              { k:'name', label:'Tech', strong:true },
+              { k:'count', label:'Appointments', n:true, render:r=>r.count.toLocaleString() },
+              { k:'share', label:'Share', n:true, dim:true, render:r=>pctOf(r.count,A.total)+'%' },
+            ]}/>
+        </Card>
       </div>
 
-      <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:16 }} className="grid-resp">
-        <Card pad={20}>
-          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>Monthly Revenue</h3>
-          {lineData.length ? (
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={lineData} margin={{ top:5,right:8,left:-20,bottom:0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false}/>
-              <XAxis dataKey="month" tick={{ fontSize:11 }} axisLine={false} tickLine={false}/>
-              <YAxis tick={{ fontSize:10 }} axisLine={false} tickLine={false}/>
-              <RTooltip content={<ChartTip money/>}/>
-              <Line type="monotone" dataKey="revenue" stroke={C.green} strokeWidth={2.5} dot={{ r:3 }} name="Revenue"/>
-            </LineChart>
-          </ResponsiveContainer>
-          ) : <div style={{ padding:'30px 20px',textAlign:'center',color:C.textDim,fontSize:13 }}>No booked revenue yet.</div>}
-        </Card>
-        <Card pad={20}>
-          <h3 style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>Services Sold (Revenue)</h3>
-          {bd.length ? (
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={bd} layout="vertical" margin={{ top:5,right:12,left:30,bottom:0 }}>
-              <XAxis type="number" tick={{ fontSize:10 }} axisLine={false} tickLine={false} tickFormatter={v=>'$'+v/1000+'k'}/>
-              <YAxis type="category" dataKey="name" tick={{ fontSize:10 }} axisLine={false} tickLine={false} width={90}/>
-              <RTooltip content={<ChartTip money/>} cursor={{ fill:C.cyanDim }}/>
-              <Bar dataKey="value" radius={[0,5,5,0]} name="Revenue">
-                {bd.map((e,i)=><Cell key={i} fill={e.color}/>)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-          ) : <div style={{ padding:'30px 20px',textAlign:'center',color:C.textDim,fontSize:13 }}>No service revenue yet.</div>}
-        </Card>
-      </div>
+      {/* what GHL cannot answer */}
+      <Card pad={18} style={{ marginBottom:20,borderColor:C.border }}>
+        <div style={{ display:'flex',gap:12,alignItems:'flex-start' }}>
+          <Icon name="alert" size={17} color={C.textDim}/>
+          <div style={{ fontSize:12.5,color:C.textDim,lineHeight:1.75 }}>
+            <b style={{ color:C.text }}>On Google Ads spend:</b> these numbers are the lead side only.
+            GoHighLevel tags each lead with a source and medium but carries no campaign name, keyword or
+            click id, so cost per lead and campaign performance cannot be derived here — you can see that
+            Google sent the lead and what happened to it, not what it cost. That needs the Google Ads
+            account connected directly.
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }
