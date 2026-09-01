@@ -297,62 +297,55 @@ try{ if(!S.jobs.length){ const old=localStorage.getItem("matrix-ledger-v2");
   if(old){ const o=JSON.parse(old); if(o&&o.jobs&&o.jobs.length){ S.jobs=o.jobs; if(o.settings&&o.settings.techs) S.settings.techs=o.settings.techs; } } } }catch(e){}
 
 let saveT=null;
-function save(){ S.savedAt=Date.now(); clearTimeout(saveT);
+/* Browser storage is not a safe home for a year of payroll. Every local save now
+   also schedules a cloud backup, so the worst case is losing the last minute of
+   typing rather than losing everything. */
+let cloudDirty=false, cloudT=null, cloudBusy=false, cloudFail=0;
+function save(){ S.savedAt=Date.now(); clearTimeout(saveT); cloudDirty=true;
   saveT=setTimeout(()=>{ try{ localStorage.setItem(KEY,JSON.stringify(S)); localAt=Date.now(); paintSync(); }
-    catch(e){ toast("Could not save locally — storage may be full."); }
-    /* The device copy is the one that must never fail, so it is written first and
-       the cloud push is fired after it — a dead network can't cost you an entry. */
-    cloudPush(); },200); }
-function paintSync(){ const el=$("#syncbox"); if(!el) return;
-  const t=ms=>ms? new Date(ms).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):"never";
-  el.innerHTML="device &nbsp;"+t(localAt)+"<br>cloud &nbsp;&nbsp;"+((cloud||supa)?t(cloudAt):"n/a"); }
-let toastT=null;
-function toast(m){const el=$("#toast");el.textContent=m;el.style.opacity="1";clearTimeout(toastT);toastT=setTimeout(()=>el.style.opacity="0",2600);}
+    catch(e){ toast("Could not save locally — storage may be full."); } },200);
+  scheduleCloud(); }
+function scheduleCloud(){
+  clearTimeout(cloudT);
+  cloudT=setTimeout(()=>{ cloudSave(true); }, 12000);   // quiet for 12s = you stopped typing
+}
+/* Leaving the page is the last safe moment to get it off this device. */
+document.addEventListener("visibilitychange",()=>{ if(document.hidden&&cloudDirty) cloudSave(true); });
+window.addEventListener("pagehide",()=>{ if(cloudDirty) cloudSave(true); });
 
-/* Two-click confirmation. window.confirm/prompt/alert are BLOCKED in the
-   artifact sandbox — they return false/null without ever showing anything, so
-   any "if(!confirm(...)) return" silently does nothing at all. First click arms
-   the control and shows what it is about to do; a second click within 4 seconds
-   goes through. Clicking anywhere else, or waiting, cancels. */
-function arm(el, done){
-  if(!el) return;
-  const label=el.textContent, cls=el.className;
-  let armed=false, t=null;
-  const reset=()=>{armed=false;clearTimeout(t);el.textContent=label;el.className=cls;};
-  el.addEventListener("click",e=>{
-    e.stopPropagation();
-    if(armed){ reset(); done(); return; }
-    armed=true; el.textContent="Click again to confirm"; el.className=cls+" danger";
-    t=setTimeout(reset,4000);
-    document.addEventListener("click",function once(){document.removeEventListener("click",once);reset();},{once:true});
-  });
+function sinceTxt(ms){
+  if(!ms) return "never";
+  const s=Math.round((Date.now()-ms)/1000);
+  if(s<60) return "just now";
+  if(s<3600) return Math.round(s/60)+" min ago";
+  if(s<86400) return Math.round(s/3600)+" hr ago";
+  return Math.round(s/86400)+" days ago";
 }
 /* ============================================================
    CLOUD SYNC — Supabase row 'ledger'
-   The ledger is the system of record. The Command Center only ever READS
-   what this pushes, so the money math lives in exactly one place: if the
-   Finance page re-derived it, the first rate change would make two screens
-   disagree and both would look right.
-   Same project and table the Command Center already syncs tasks and goals
-   through, so there is one place to look when something stops arriving.
-   Conflict rule: last write wins on savedAt, and a device only ADOPTS a row
-   that is strictly newer than what it already holds — a stale tab left open
-   overnight cannot overwrite the day's work.
+   Running on the Command Center's own domain, "the cloud" is Supabase rather
+   than the artifact's file store; inside claude.ai it is still the file store.
+   The scheduling above is unchanged — 12 seconds of quiet, plus a flush when the
+   tab is hidden or closed — only the transport differs.
+   The ledger is the system of record. The Command Center only ever READS what
+   this pushes, so the money math lives in one place: if the Finance page
+   re-derived it, the first rate change would make two screens disagree and both
+   would look right.
+   Conflict rule: last write wins on savedAt, and a device only ADOPTS a copy
+   strictly newer than its own, so a stale tab cannot overwrite the day's work.
    ============================================================ */
 const SUPA_URL="https://llrmrekixkrtxuyqsbwb.supabase.co";
 const SUPA_KEY="sb_publishable_jD7t0YZl64xkLAPYJOfOgQ_GBnROkJv";  /* publishable (anon) key — browser-safe under RLS */
 const SUPA_TABLE="matrix", SUPA_ROW="ledger";
 const supa=(window.supabase&&window.supabase.createClient)
   ? window.supabase.createClient(SUPA_URL,SUPA_KEY) : null;
-let pushT=null, pushBusy=false, lastPushedAt=0;
 
 const isoOf=ms=>new Date(ms).toISOString().slice(0,10);
 
-/* The finished numbers, computed here and shipped ready to render.
-   Mirrors the Year view exactly: a period reads LIVE the moment anything is
-   logged into it, and falls back to what the original workbook recorded until
-   then, so the year is whole from January rather than from the day this app
-   started. */
+/* The finished numbers, computed here and shipped ready to render. Mirrors the
+   Year view exactly: a period reads LIVE the moment anything is logged into it,
+   and falls back to what the original workbook recorded until then, so the year
+   is whole from January rather than from the day this app started. */
 function ledgerSummary(){
   const rows=PERIODS.map(p=>{
     const t=totals(p.id), P=plan(p.id), h=HISTORY[p.id];
@@ -409,86 +402,127 @@ function monthlySeries(rows){
   return Object.keys(m).sort().map(k=>({monthKey:k, month:MN[+k.slice(5,7)-1], revenue:Math.round(m[k])}));
 }
 
+/* Push. Throws on refusal so cloudSave's existing retry/backoff handles it. */
+async function supaPush(snapshot){
+  const updated_at=new Date().toISOString();
+  const { error } = await supa.from(SUPA_TABLE).upsert({
+    id:SUPA_ROW,
+    data:{ savedAt:S.savedAt||0, state:JSON.parse(snapshot), summary:ledgerSummary() },
+    updated_at });
+  if(error) throw new Error(error.message||"the database refused the write");
+}
+
+function adoptCloud(st, at){
+  S=st; if(!S.extras) S.extras={};
+  cloudDirty=false; cloudAt=at||Date.now();
+  try{ localStorage.setItem(KEY,JSON.stringify(S)); localAt=Date.now(); }catch(e){}
+  fillPeriods(); renderAll();
+  toast("Loaded the newer copy from the cloud.");
+}
+
 async function cloudPull(){
   if(!supa) return;
   try{
-    const {data,error}=await supa.from(SUPA_TABLE).select("data,updated_at").eq("id",SUPA_ROW).maybeSingle();
-    if(error){ syncErr(error); return; }
-    if(!data) return;                    /* nothing up there yet — first run */
-    cloudAt=Date.parse(data.updated_at)||Date.now(); paintSync();
-    adopt(data.data);
-  }catch(e){ syncErr(e); }
+    const { data, error } = await supa.from(SUPA_TABLE)
+      .select("data,updated_at").eq("id",SUPA_ROW).maybeSingle();
+    if(error){ cloudFail++; paintSync(); return; }
+    const st = data && data.data && data.data.state;
+    if(!st || !st.settings || !Array.isArray(st.jobs)){
+      /* Nothing usable up there yet — this device seeds it. */
+      if(S.jobs.length||Object.keys(S.spend||{}).length){ cloudDirty=true; scheduleCloud(); }
+      return;
+    }
+    if(!S.savedAt || st.savedAt>S.savedAt) adoptCloud(st, Date.parse(data.updated_at));
+    else if(S.savedAt > (st.savedAt||0)+1000){ cloudAt=Date.parse(data.updated_at)||0; cloudDirty=true; scheduleCloud(); }
+    else { cloudAt=Date.parse(data.updated_at)||0; cloudDirty=false; }
+    paintSync();
+  }catch(e){ cloudFail++; paintSync(); }
 }
-function adopt(d){
-  const st=d&&d.state;
-  if(!st||!st.settings||!Array.isArray(st.jobs)) return;
-  if(!(st.savedAt>(S.savedAt||0))) return;      /* ours is the same or newer — keep it */
-  S=st; if(!S.extras) S.extras={};
-  lastPushedAt=S.savedAt;                        /* don't bounce it straight back */
-  try{ localStorage.setItem(KEY,JSON.stringify(S)); localAt=Date.now(); }catch(e){}
-  renderAll();
-  toast("Pulled a newer copy from the cloud.");
-}
+
 function cloudWatch(){
   if(!supa) return;
   supa.channel("matrix-ledger")
     .on("postgres_changes",{event:"*",schema:"public",table:SUPA_TABLE,filter:"id=eq."+SUPA_ROW},
-      pl=>{ if(pl&&pl.new){ cloudAt=Date.parse(pl.new.updated_at)||Date.now(); paintSync(); adopt(pl.new.data); } })
+      pl=>{ const st = pl && pl.new && pl.new.data && pl.new.data.state;
+        if(st && st.settings && Array.isArray(st.jobs) && st.savedAt>(S.savedAt||0))
+          adoptCloud(st, Date.parse(pl.new.updated_at)); })
     .subscribe();
   addEventListener("focus",()=>{ cloudPull(); });
 }
-/* Debounced: a burst of edits is one write, not fifteen. */
-function cloudPush(opt){
-  if(!supa) return;
-  clearTimeout(pushT);
-  pushT=setTimeout(()=>doPush(!!(opt&&opt.force)),900);
+function paintSync(){ const el=$("#syncbox"); if(!el) return;
+  let cloudLine;
+  if(!cloud&&!supa) cloudLine='<span style="color:var(--neg)">cloud n/a</span>';
+  else if(cloudBusy) cloudLine="cloud saving…";
+  else if(cloudDirty) cloudLine='<span style="color:var(--warn)">cloud pending</span>';
+  else cloudLine="cloud "+sinceTxt(cloudAt);
+  el.innerHTML="device "+sinceTxt(localAt)+"<br>"+cloudLine+
+    (cloudFail>1?'<br><span style="color:var(--neg)">backup failing — download one</span>':"");
 }
-async function doPush(force){
-  if(!supa||pushBusy) return;
-  if(!force&&S.savedAt===lastPushedAt) return;
-  pushBusy=true;
-  try{
-    const updated_at=new Date().toISOString();
-    const {error}=await supa.from(SUPA_TABLE).upsert({
-      id:SUPA_ROW,
-      data:{savedAt:S.savedAt||0, state:S, summary:ledgerSummary()},
-      updated_at});
-    if(error) syncErr(error);
-    else{ lastPushedAt=S.savedAt; cloudAt=Date.now(); paintSync();
-      if(force) toast("Synced. The Command Center has these numbers."); }
-  }catch(e){ syncErr(e); }
-  pushBusy=false;
+setInterval(paintSync,30000);   // keep "3 min ago" honest without a re-render
+let toastT=null;
+function toast(m){const el=$("#toast");el.textContent=m;el.style.opacity="1";clearTimeout(toastT);toastT=setTimeout(()=>el.style.opacity="0",2600);}
+
+/* Two-click confirmation. window.confirm/prompt/alert are BLOCKED in the
+   artifact sandbox — they return false/null without ever showing anything, so
+   any "if(!confirm(...)) return" silently does nothing at all. First click arms
+   the control and shows what it is about to do; a second click within 4 seconds
+   goes through. Clicking anywhere else, or waiting, cancels. */
+function arm(el, done){
+  if(!el) return;
+  const label=el.textContent, cls=el.className;
+  let armed=false, t=null;
+  const reset=()=>{armed=false;clearTimeout(t);el.textContent=label;el.className=cls;};
+  el.addEventListener("click",e=>{
+    e.stopPropagation();
+    if(armed){ reset(); done(); return; }
+    armed=true; el.textContent="Click again to confirm"; el.className=cls+" danger";
+    t=setTimeout(reset,4000);
+    document.addEventListener("click",function once(){document.removeEventListener("click",once);reset();},{once:true});
+  });
 }
-/* A refused write is invisible from the driver's seat — the number just never
-   turns up on the other screen. Say what happened and what fixes it. */
-function syncErr(e){
-  const m=(e&&e.message)||"";
-  if(/row-level security|permission|policy|violates/i.test(m))
-    toast("Supabase refused the write — the 'matrix' table needs an insert/update policy.");
-  else if(/fetch|network|Failed/i.test(m))
-    toast("No connection to the cloud. The device copy is saved.");
-  else toast("Cloud sync error: "+(m||"unknown"));
-}
-/* "Cloud" means Supabase when this runs on the Command Center's domain, and the
-   artifact's own file store when it runs inside claude.ai. Both are tried, so the
-   same file works in either place and the sync box always says which one answered. */
-(async()=>{
-  try{ cloud=window.claude&&claude.use? await claude.use("artifact"):null; }catch(e){cloud=null;}
+(async()=>{ try{ cloud=window.claude&&claude.use? await claude.use("artifact"):null; }catch(e){cloud=null;}
   if(cloud){
+    /* Inside claude.ai the artifact's own file store is the cloud. */
     try{ const r=await fetch("data/ledger.json",{cache:"no-store"});
-      if(r.ok){const o=await r.json(); if(o&&o.settings&&(!S.savedAt||o.savedAt>S.savedAt)){S=o;renderAll();toast("Loaded the cloud copy — it was newer.");}} }catch(e){}
+      if(r.ok){ const o=await r.json();
+        if(o&&o.settings){
+          cloudAt=o.savedAt||0;
+          if(!S.savedAt||o.savedAt>S.savedAt){
+            /* The cloud copy is newer — another device did the work. Take it. */
+            S=o; if(!S.extras)S.extras={}; cloudDirty=false; fillPeriods(); renderAll();
+            toast("Loaded the newer copy from the cloud.");
+          } else if(S.savedAt>(o.savedAt||0)+1000){
+            /* This device is ahead. Push it up rather than sitting on the only copy. */
+            cloudDirty=true; scheduleCloud();
+          } else { cloudDirty=false; }
+        } }
+    }catch(e){}
   }
-  await cloudPull();
-  cloudWatch();
-  /* Push once on open when this device holds the newest copy, so the Finance
-     page is current even on a day nothing gets edited. */
-  if(S.jobs.length||Object.keys(S.spend||{}).length) cloudPush();
+  /* On the hosted copy the cloud is Supabase, and the Command Center reads the
+     summary this pushes. */
+  if(supa){ await cloudPull(); cloudWatch(); }
   paintSync(); })();
-async function cloudSave(){
-  if(supa){ await doPush(true); return; }
-  if(!cloud||!cloud.publish){ toast("Cloud backup unavailable here. Use Download backup."); return; }
-  try{ await cloud.publish({"data/ledger.json":JSON.stringify(S)}); cloudAt=Date.now(); paintSync(); toast("Backed up to the cloud."); }
-  catch(e){ toast("Cloud backup failed"+(e&&e.code?" ("+e.code+")":"")+". Device copy is still saved."); }
+/* auto=true is the background backup: no toast unless something is wrong. */
+async function cloudSave(auto){
+  if(!cloud&&!supa){ if(!auto) toast("Cloud sync unavailable here. Use Download backup."); return; }
+  if(cloudBusy){ scheduleCloud(); return; }
+  cloudBusy=true; paintSync();
+  const snapshot=JSON.stringify(S);
+  try{
+    /* Supabase on the hosted copy, the artifact's file store inside claude.ai. */
+    if(supa) await supaPush(snapshot);
+    else await cloud.publish({"data/ledger.json":snapshot});
+    cloudAt=Date.now(); cloudFail=0;
+    // anything typed while the upload was in flight still needs sending
+    cloudDirty = (JSON.stringify(S)!==snapshot);
+    if(cloudDirty) scheduleCloud();
+    if(!auto) toast(supa?"Synced. The Command Center has these numbers.":"Backed up to the cloud.");
+  }catch(e){
+    cloudFail++;
+    if(!auto||cloudFail===2) toast("Cloud sync failed"+(e&&(e.code||e.message)?" ("+(e.code||e.message)+")":"")+
+      ". Your device copy is fine — download a backup to be safe.");
+    if(cloudFail<5) cloudT=setTimeout(()=>cloudSave(true), 30000*cloudFail);  // back off, keep trying
+  }finally{ cloudBusy=false; paintSync(); }
 }
 
 /* ---------------- derivation ---------------- */
@@ -1269,16 +1303,25 @@ function renderSetup(){
           <p class="hint">Open the same link in Chrome or Safari, then <b>Share → Add to Home Screen</b>.
           Same icon treatment, works one-handed in the van.</p></div>
         <div class="qbcard"><div class="nm">How the sync works</div>
-          <p class="hint">Each device keeps its own copy in browser storage, which is why it opens instantly
-          and works with no signal. Every save also goes up to the cloud a second later, and the
-          Command Center's Finance page reads those numbers straight from there — you never have to
-          send anything. Open the ledger on another device and it pulls the newest copy down.
-          If you are out of signal, keep working: the device copy is written first, and the cloud
-          catches up when you are back.</p></div>
+          <p class="hint">Each device keeps its own copy in browser storage — that is why it opens instantly
+          and works with no signal. It now <b>backs itself up to the cloud automatically</b>, about 12 seconds
+          after you stop typing and again whenever you close the tab. When another device opens the app it
+          takes the cloud copy if that copy is newer — and it comes down live, so a phone left open picks up
+          what the laptop just entered without a reload.</p>
+          <p class="hint">That same backup is what the <b>Command Center's Finance page</b> reads. The numbers
+          there — revenue, labor, spend, net — are computed here and shipped ready to display, so there is no
+          second version of the math to disagree with this one, and nothing to send by hand.</p>
+          <p class="hint">The status in the bottom-left corner tells you where you stand: <b>cloud 2 min ago</b>
+          means it is safe, <b>cloud pending</b> means a backup is queued, <b>cloud n/a</b> means this view
+          cannot reach it — download a backup instead.</p></div>
       </div>
       <p class="hint" style="margin-top:.6rem"><b>Careful:</b> a downloaded copy saved to your hard drive is a
       <i>separate</i> silo — browser storage is per-address, so a file opened from your Downloads folder will not
-      see what the hosted link has. Treat downloads as backups, not as a second place to work.</p></div>
+      see what the hosted link has. Treat downloads as backups, not as a second place to work.</p>
+      <p class="hint"><b>The one rule that keeps this safe:</b> finish a pay period on <i>one</i> device before
+      opening it on another. The sync is last-writer-wins, not a merge — if you enter three jobs on your phone
+      while your desktop still has the tab open, whichever one saves last overwrites the other. Close the tab
+      on the device you are done with and it will push its copy up on the way out.</p></div>
     <div class="two">
       <div class="card"><h2>Commission rates</h2>
         <div class="grid">${F.map(([k,l,u])=>`<div class="f"><label>${l}</label>
@@ -1327,9 +1370,9 @@ function renderSetup(){
             <td><input type="checkbox" data-ks="${esc(m)}" ${S.settings.ksMethods.indexOf(m)>-1?"checked":""}></td></tr>`).join("")}</tbody></table></div></div>
     </div>
     <div class="card"><h2>Backups</h2>
-      <p class="sub">Every save syncs on its own. The button is only there for when you want to watch it happen.</p>
+      <p class="sub">Data lives in this browser. The cloud copy travels with the app and survives a lost laptop.</p>
       <div class="bar">
-        <button class="pri" id="cloudSave">Sync now</button>
+        <button class="pri" id="cloudSave">Back up to cloud</button>
         <button id="expJson">Download backup file</button>
         <button id="impJson">Restore from a backup</button>
         <button id="loadSample">Load a sample period</button>
@@ -1362,7 +1405,7 @@ function renderSetup(){
   $$("[data-ta]").forEach(b=>b.addEventListener("change",()=>{
     S.settings.techs[+b.dataset.ta].active=b.checked; save(); renderAll();
     toast(b.checked?"Back on the crew.":"Marked as left — their past pay is untouched.");}));
-  $("#cloudSave").addEventListener("click",cloudSave);
+  $("#cloudSave").addEventListener("click",()=>cloudSave(false));
   $("#expJson").addEventListener("click",()=>offer("matrix-ledger-backup.json",JSON.stringify(S,null,2)));
   $("#impJson").addEventListener("click",()=>{
     const box=$("#restoreBox");
@@ -1439,6 +1482,7 @@ function renderAll(){
 }
 fillPeriods(); renderAll();
 let rz=null; addEventListener("resize",()=>{clearTimeout(rz);rz=setTimeout(()=>{if(VIEW==="year")renderYear();},220);});
+</script>
 </script>
 
 </body>
