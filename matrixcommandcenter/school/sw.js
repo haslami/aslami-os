@@ -5,7 +5,7 @@
  * Cache the shell and the CDN libraries so the app always starts, then let
  * Supabase fail loudly on its own (the UI already shows a red banner).
  */
-const CACHE = 'ultramind-school-v3';
+const CACHE = 'ultramind-school-v4';
 
 const SHELL = [
   './',
@@ -24,8 +24,17 @@ const SHELL = [
 self.addEventListener('install', e => {
   e.waitUntil((async () => {
     const c = await caches.open(CACHE);
-    // Don't let one unreachable CDN file abort the whole install.
-    await Promise.allSettled(SHELL.map(u => c.add(new Request(u, { mode: 'no-cors' }))));
+    // cache.add() REJECTS an opaque response (status 0), which is exactly what
+    // a no-cors CDN fetch returns — so add() silently cached nothing from
+    // unpkg and the app still could not boot offline. fetch + put accepts
+    // opaque responses, and an opaque script is perfectly usable via <script>.
+    await Promise.allSettled(SHELL.map(async (u) => {
+      const cross = u.startsWith('http') && !u.startsWith(self.location.origin);
+      const req = cross ? new Request(u, { mode: 'no-cors' }) : new Request(u);
+      const res = await fetch(req);
+      if (!cross && !res.ok) throw new Error('bad status ' + res.status);
+      await c.put(req, res);
+    }));
     self.skipWaiting();
   })());
 });
