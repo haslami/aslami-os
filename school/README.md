@@ -7,8 +7,12 @@ Single-file app at `school/index.html`. Fall 2026, Missouri State.
 **https://matrixcommandcenter.netlify.app/school/**
 
 That is the whole answer on every device — desktop, laptop, iPhone. Nothing to
-install, nothing to sync first, no server to start. On iPhone: open it, Share →
-Add to Home Screen, and it behaves like an app.
+install, nothing to sync first, no server to start.
+
+- **Desktop / laptop:** `School Command Center` on your Desktop. Your Desktop is
+  OneDrive-backed, so that shortcut is already on the laptop too.
+- **iPhone:** open the link, Share → **Add to Home Screen**. It installs as
+  "School" with its own icon and opens full-screen, no browser chrome.
 
 **It is public.** No passcode, by choice. Anyone with the URL can read your
 coursework, notes, and lessons. Nothing in it is a credential.
