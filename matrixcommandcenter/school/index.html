@@ -223,9 +223,11 @@ function blankDB(){
     done: {},          /* uid -> ISO timestamp */
     materials: [],     /* uploaded decks / notes / study guides, with extracted text */
     cards: [],         /* flashcards w/ spaced repetition state */
+    daily: [],         /* one-idea-a-day lessons Claude wrote, served in order */
+    dailyLog: {},      /* dailyId -> ISO completed, drives the Daily streak */
     packs: [],         /* study packs: guide + cards + quiz + test + games */
     results: {},       /* packId -> mode -> {right,total,pct,best,at} */
-    lessonLog: {},     /* packId:mode -> ISO completed, drives the day streak */
+    lessonLog: {},     /* packId:mode -> ISO completed, drives the Study streak */
     log: [],           /* study sessions */
     schedule: {
       /* Habib's real constraints: business runs KC, Saturdays are owner jobs. */
@@ -1341,6 +1343,243 @@ function recordResult(setDb, packId, mode, right, total){
   });
 }
 
+
+/* ============================================================
+   DAILY — I pick what he learns today
+
+   Deliberately NOT the Study tab. Study is volume and repetition before a
+   test; Daily is one small idea, taught properly, once a day, chosen by
+   whichever exam is closest and what he has not been taught yet. Four
+   minutes, three points, then he has to answer for it.
+   ============================================================ */
+
+function dailyQueue(db){
+  const log = db.dailyLog || {};
+  const open = (db.daily||[]).filter(l=>!log[l.id]);
+  if(!open.length) return [];
+  const rank = teachPriority(db);
+  const order = new Map(rank.map((r,i)=>[r.course.id, i]));
+  return open.sort((a,b)=>
+    (order.get(a.courseId) ?? 99) - (order.get(b.courseId) ?? 99) || (a.seq||0) - (b.seq||0));
+}
+
+/* One a day. Finishing today's does not immediately hand him tomorrow's —
+   that turns a habit into a binge and nothing sticks. */
+function dailyToday(db){
+  const log = db.dailyLog || {};
+  const doneToday = Object.entries(log).filter(([id,at])=>dayKey(at)===todayKey());
+  const q = dailyQueue(db);
+  return { lesson: q[0] || null, doneToday: doneToday.length, remaining: q.length };
+}
+
+function DailyView({db, setDb, go}){
+  const {lesson, doneToday, remaining} = useMemo(()=>dailyToday(db),
+    [db.daily, db.dailyLog, db.events, db.materials]);
+  const [reveal,setReveal] = useState({});
+  const [showAll,setShowAll] = useState(false);
+  const [copied,copy] = useCopy();
+  const course = lesson ? db.courses.find(c=>c.id===lesson.courseId) : null;
+
+  const streak = useMemo(()=>{
+    const days = new Set(Object.values(db.dailyLog||{}).map(dayKey));
+    let n=0;
+    for(let i=0;i<400;i++){
+      const d = dayKey(new Date(startOfDay(new Date()).getTime() - i*DAY));
+      if(days.has(d)) n++; else if(i>0) break;
+    }
+    return n;
+  },[db.dailyLog]);
+
+  const finish = () => {
+    if(!lesson) return;
+    setDb(d=>({...d, dailyLog:{...(d.dailyLog||{}), [lesson.id]: new Date().toISOString()}}));
+    setReveal({}); setShowAll(false);
+  };
+
+  return (
+    <div className="fade-in">
+      <H sub="One idea a day, picked for whichever exam is closest. Four minutes, then you answer for it."
+         right={<Btn ghost tone={T.accent2} onClick={()=>copy(dailyPrompt(db))}>
+           {copied ? 'Copied — paste to Claude' : 'Ask Claude for more days'}
+         </Btn>}>
+        Daily
+      </H>
+
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:11, marginBottom:20}}>
+        <Stat label="Day streak" value={streak} tone={streak>0?T.good:T.dimmer}/>
+        <Stat label="Done today" value={doneToday} tone={doneToday?T.good:T.dimmer}/>
+        <Stat label="Days queued" value={remaining} tone={remaining?T.accent2:T.bad}/>
+      </div>
+
+      {!lesson ? (
+        <Card><Empty icon="✦" title={(db.daily||[]).length ? 'You are caught up' : 'No lessons queued yet'}
+          sub={(db.daily||[]).length
+            ? 'Every lesson Claude has written for you is done. Hit “Ask Claude for more days” and paste the result into Settings, or go drill what you already know under Study.'
+            : 'Upload your course material in the Study Lab, then hit “Ask Claude for more days”. You get one short lesson a day, chosen for you, so nothing piles up.'}/></Card>
+      ) : (
+        <React.Fragment>
+          {doneToday > 0 && (
+            <Card style={{marginBottom:14, borderColor:T.good+'44', background:T.good+'0a'}}>
+              <div style={{fontSize:13.5, color:T.dim, lineHeight:1.6}}>
+                <strong style={{color:T.good}}>Today is done. </strong>
+                This is tomorrow&rsquo;s, if you want to run ahead. Spacing beats cramming, but a
+                second one now beats none tomorrow.
+              </div>
+            </Card>
+          )}
+
+          <Card style={{marginBottom:14, borderColor:(course?course.color:T.accent)+'55',
+            background:'linear-gradient(135deg,'+(course?course.color:T.accent)+'12, rgba(14,16,22,.9))'}}>
+            <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:9}}>
+              {course && <Pill tone={course.color}>{course.code}</Pill>}
+              {lesson.unit && <Pill tone={T.info}>{lesson.unit}</Pill>}
+              <Pill tone={T.dimmer}>{lesson.minutes||4} min</Pill>
+            </div>
+            <div style={{fontSize:22, fontWeight:800, letterSpacing:-.4, lineHeight:1.2}}>{lesson.title}</div>
+            {lesson.hook && <div style={{fontSize:14.5, color:T.dim, marginTop:9, lineHeight:1.65}}>{lesson.hook}</div>}
+          </Card>
+
+          <div style={{display:'grid', gap:11}}>
+            {(lesson.teach||[]).map((t,i)=>(
+              <Card key={i}>
+                <div style={{fontSize:16, fontWeight:750, lineHeight:1.4, marginBottom:8}}>{t.point}</div>
+                <div style={{fontSize:14.5, lineHeight:1.72, color:'#cfd5e0'}}>{t.plain}</div>
+                {t.edge && <div style={{marginTop:11, padding:'11px 14px', background:T.bad+'0f',
+                  borderLeft:'2px solid '+T.bad, borderRadius:'0 8px 8px 0', fontSize:13.5,
+                  color:T.dim, lineHeight:1.65}}>
+                  <strong style={{color:T.bad}}>Where people lose the point: </strong>{t.edge}</div>}
+              </Card>
+            ))}
+          </div>
+
+          {lesson.connect && (
+            <Card style={{marginTop:12, borderColor:T.accent2+'44', background:T.accent2+'0a'}}>
+              <div style={{fontSize:11.5, letterSpacing:1, textTransform:'uppercase', color:T.accent2,
+                fontWeight:800, marginBottom:8}}>Why this is worth your time</div>
+              <div style={{fontSize:14.5, lineHeight:1.72}}>{lesson.connect}</div>
+            </Card>
+          )}
+
+          {(lesson.check||[]).length>0 && (
+            <Card style={{marginTop:16}}>
+              <div style={{fontSize:11.5, letterSpacing:1, textTransform:'uppercase', color:T.dim,
+                fontWeight:800, marginBottom:12}}>Answer these before you move on</div>
+              <div style={{display:'grid', gap:10}}>
+                {lesson.check.map((c,i)=>(
+                  <div key={i} style={{background:T.panel2, border:'1px solid '+T.line,
+                    borderRadius:10, padding:'13px 15px'}}>
+                    <div style={{fontSize:14, fontWeight:600}}>{c.q}</div>
+                    {reveal[i]
+                      ? <div className="scale-in" style={{fontSize:13.5, color:T.good, marginTop:9,
+                          paddingTop:9, borderTop:'1px solid '+T.line, lineHeight:1.7}}>{c.a}</div>
+                      : <button onClick={()=>setReveal(r=>({...r,[i]:true}))}
+                          style={{fontSize:12.5, color:T.dim, marginTop:8}}>
+                          say it out loud, then tap to check</button>}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          <div style={{display:'flex', gap:10, marginTop:18, flexWrap:'wrap'}}>
+            <Btn onClick={finish} style={{minWidth:180}}>Done — lock it in</Btn>
+            <Btn ghost tone={T.line} onClick={()=>go({view:'teach'})}>Go drill it instead</Btn>
+          </div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+/* The prompt for authoring more days. Deliberately narrow: short, active,
+   and framed for someone who runs a business and resents busywork. */
+function dailyPrompt(db){
+  const ranked = teachPriority(db).filter(r=>r.mats.length);
+  const taught = (db.daily||[]).map(l=>l.title);
+  const P = [];
+  P.push('Write my next 10 DAILY lessons. One idea per day, four minutes each. I run a business and I do not read textbooks — teach me the way a good tutor would if they only had my attention for four minutes.');
+  P.push('');
+  P.push('Return ONLY a JSON array in this exact shape:');
+  P.push('[{ "id":"unique-slug", "courseId":"<from below>", "unit":"<from below>", "seq":1,');
+  P.push('   "title":"the idea, stated as a claim not a topic",');
+  P.push('   "minutes":4,');
+  P.push('   "hook":"one sentence on why this is worth four minutes",');
+  P.push('   "teach":[ { "point":"the claim in one line",');
+  P.push('               "plain":"3-5 sentences in plain English, no textbook phrasing",');
+  P.push('               "edge":"the specific thing people get wrong here" } ],');
+  P.push('   "connect":"how this actually shows up when running a company - only if it genuinely does, else omit",');
+  P.push('   "check":[ { "q":"a question he must answer from memory", "a":"the answer" } ] }]');
+  P.push('');
+  P.push('Rules:');
+  P.push('- Exactly 2-3 "teach" entries per lesson. Never more. Four minutes is the hard ceiling.');
+  P.push('- 2 "check" questions per lesson.');
+  P.push('- Titles are claims, not topics. "Productivity can fall while revenue rises" beats "Productivity".');
+  P.push('- Sequence them so each day builds on the last within a course.');
+  P.push('- Prioritise the course whose exam is closest, but do not ignore the others entirely.');
+  P.push('- No filler, no restating the slide. If a point is obvious, cut it and teach something harder.');
+  P.push('- "connect" must be a real operational parallel, not a forced metaphor. Omit it rather than reach.');
+  P.push('');
+  if(taught.length) P.push('Already taught, do not repeat: ' + taught.join(' | '), '');
+  for(const r of ranked.slice(0,3)){
+    const active = activeUnit(db, r.course);
+    P.push('=== ' + r.course.code + ' — ' + r.course.name + ' ===');
+    P.push('courseId: ' + r.course.id + (active ? '   unit: ' + active.label : ''));
+    if(r.exam) P.push('Next exam: ' + r.exam.title + ' in ' + r.days + ' days');
+    const budget = Math.floor(22000 / Math.max(1, r.mats.length));
+    for(const m of [...r.mats].sort((a,b)=>kindMeta(b.role).weight - kindMeta(a.role).weight)){
+      P.push('');
+      P.push('--- [' + (m.unit||'Unfiled') + '] ' + kindMeta(m.role).label.toUpperCase() + ': ' + m.name + ' ---');
+      P.push((m.text||'').slice(0, budget));
+    }
+    P.push('');
+  }
+  return P.join('\n');
+}
+
+/* Paste-back for daily lessons. */
+function DailyImport({db, setDb}){
+  const [raw,setRaw] = useState(''); const [msg,setMsg] = useState('');
+  const load = () => {
+    setMsg('');
+    try{
+      let t = raw.trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+      const s = t.indexOf('['), e = t.lastIndexOf(']');
+      if(s>-1 && e>s) t = t.slice(s, e+1);
+      let arr = JSON.parse(t);
+      if(!Array.isArray(arr)) arr = [arr];
+      const known = new Set(db.courses.map(c=>c.id));
+      const clean = arr.filter(l=>l && l.title && Array.isArray(l.teach) && l.teach.length)
+        .map((l,i)=>({...l,
+          id: String(l.id || ('daily-'+Date.now()+'-'+i)),
+          courseId: known.has(l.courseId) ? l.courseId : db.courses[0].id,
+          seq: l.seq || i+1, minutes: l.minutes || 4,
+          check: l.check || [] }));
+      if(!clean.length) throw new Error('nothing in there had a title and teach points');
+      setDb(d=>{
+        const have = new Set((d.daily||[]).map(x=>x.id));
+        return {...d, daily:[...(d.daily||[]), ...clean.filter(l=>!have.has(l.id))]};
+      });
+      setMsg('Queued ' + clean.length + ' day' + (clean.length===1?'':'s') + '. Open Daily.');
+      setRaw('');
+    }catch(e){ setMsg('Could not read that: ' + e.message); }
+  };
+  return (
+    <div>
+      <textarea rows={5} value={raw} onChange={e=>setRaw(e.target.value)}
+        placeholder='Paste the JSON array of daily lessons...' style={{fontSize:12}} className="mono"/>
+      <div style={{display:'flex', gap:9, marginTop:10, flexWrap:'wrap', alignItems:'center'}}>
+        <Btn onClick={load} disabled={!raw.trim()}>Load days</Btn>
+        {(db.daily||[]).length>0 && <Btn ghost tone={T.bad} onClick={()=>{
+          if(window.confirm && !window.confirm('Clear every daily lesson and the completion log?')) return;
+          setDb(d=>({...d, daily:[], dailyLog:{}})); setMsg('Cleared.');
+        }}>Clear all days</Btn>}
+        <span style={{fontSize:12, color:T.dim}}>
+          {(db.daily||[]).length} written · {dailyQueue(db).length} unread</span>
+      </div>
+      {msg && <div style={{fontSize:12.5, color:T.accent2, marginTop:10, lineHeight:1.6}}>{msg}</div>}
+    </div>
+  );
+}
 /* ============================================================
    STUDY HUB
    ============================================================ */
@@ -2855,6 +3094,11 @@ function SettingsView({db, setDb, fs}){
     <div className="fade-in">
       <H sub="Sync, backup, and how this thing gets your Brightspace data">Settings</H>
 
+      <Row title="Load daily lessons from Claude"
+        sub="On the Daily lesson tab, hit “Ask Claude for more days”. Paste the JSON array back here. These are the short one-idea-a-day lessons, separate from the drill packs below.">
+        <DailyImport db={db} setDb={setDb}/>
+      </Row>
+
       <Row title="Load a study pack from Claude"
         sub="On the Study tab, hit “Ask Claude to build a pack” — it copies your uploaded material, your unit and your exam date. Paste that into Claude, then paste the JSON it returns back here. One pack gives you the guide, flashcards, quiz, exam simulator, matching game and scenarios.">
         <PackImport db={db} setDb={setDb}/>
@@ -3012,9 +3256,11 @@ function App(){
   const nextExam = upcomingExams(db)[0];
 
   const packCount = (db.packs||[]).length;
+  const dailyLeft = (db.daily||[]).filter(l=>!(db.dailyLog||{})[l.id]).length;
   const NAV = [
     {k:'today', label:'Today', icon:'◉', badge:urgent||null, tone:T.bad},
-    {k:'teach', label:'Study', icon:'✦', badge:packCount||null, tone:T.accent2},
+    {k:'daily', label:'Daily lesson', icon:'✦', badge:dailyLeft||null, tone:T.good},
+    {k:'teach', label:'Study & drill', icon:'◈', badge:packCount||null, tone:T.accent2},
     {k:'schedule', label:'Schedule', icon:'▦'},
     {k:'exams', label:'Exams', icon:'⚑', badge:nextExam?Math.max(0,daysUntil(nextExam.date)):null, tone:T.warn},
     {k:'lab', label:'Study Lab', icon:'▤', badge:db.materials.length||null},
@@ -3023,6 +3269,7 @@ function App(){
 
   const body = (()=>{
     if(nav.view==='today')    return <TodayView db={db} setDb={setDb} go={go}/>;
+    if(nav.view==='daily')    return <DailyView db={db} setDb={setDb} go={go}/>;
     if(nav.view==='teach')    return <TeachView db={db} setDb={setDb} go={go}/>;
     if(nav.view==='schedule') return <ScheduleView db={db} setDb={setDb}/>;
     if(nav.view==='exams')    return <ExamsView db={db}/>;
@@ -3144,6 +3391,15 @@ function App(){
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+/* Offline shell. Registered after render so a failure here can never stop the
+   app from booting. Only over https — a service worker cannot install on the
+   file:// or plain-http local copy, and that is fine. */
+if('serviceWorker' in navigator && location.protocol === 'https:'){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  });
+}
 
 </script>
 </body>
