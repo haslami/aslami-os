@@ -223,8 +223,9 @@ function blankDB(){
     done: {},          /* uid -> ISO timestamp */
     materials: [],     /* uploaded decks / notes / study guides, with extracted text */
     cards: [],         /* flashcards w/ spaced repetition state */
-    lessons: [],       /* daily lessons Claude wrote, queued in order */
-    lessonLog: {},     /* lessonId -> ISO completed, drives the streak */
+    packs: [],         /* study packs: guide + cards + quiz + test + games */
+    results: {},       /* packId -> mode -> {right,total,pct,best,at} */
+    lessonLog: {},     /* packId:mode -> ISO completed, drives the day streak */
     log: [],           /* study sessions */
     schedule: {
       /* Habib's real constraints: business runs KC, Saturdays are owner jobs. */
@@ -712,55 +713,6 @@ function gradeCard(card, correct){
            right:(card.right||0)+(correct?1:0), wrong:(card.wrong||0)+(correct?0:1) };
 }
 const cardDue = c => new Date(c.due) <= new Date();
-
-/* ============================================================
-   PROMPT PACK — the handoff to Claude for real teaching
-   ============================================================ */
-function teachPrompt(mat, course){
-  const body = (mat.pack.sections||[]).map(s =>
-    '## ' + s.head + '\n' + (s.points||[]).map(p=>'- '+p).join('\n')
-  ).join('\n\n');
-  return [
-    'Teach me this deck like I have not been paying attention in class, because I have not.',
-    'Course: ' + (course ? course.code + ' - ' + course.name : 'unknown'),
-    'Material: ' + mat.name,
-    '',
-    'Do this in order:',
-    '1. The 5 things I actually have to walk out knowing. No filler.',
-    '2. Explain each one in plain English with an example from running a small business.',
-    '3. The 3 things a professor is most likely to put on the exam, and how they would word it.',
-    '4. The traps - what students get wrong on this material.',
-    '5. Quiz me with 8 questions, hardest last. Do not give me the answers until I answer.',
-    '',
-    '--- SOURCE MATERIAL ---',
-    body.slice(0, 24000),
-  ].join('\n');
-}
-
-function examPrompt(course, exam, mats, events){
-  const covered = mats.map(m=>'- '+m.name).join('\n') || '- (nothing uploaded yet)';
-  const topics = mats.flatMap(m => (m.pack.terms||[]).slice(0,12).map(t=>t.term));
-  const uniqTopics = [...new Set(topics)].slice(0, 60);
-  return [
-    'I have an exam and I need a cram plan that respects how little time I have.',
-    'Course: ' + course.code + ' - ' + course.name,
-    'Exam: ' + exam.title,
-    'Date: ' + fmtDate(icsToDate(exam.at), {weekday:'long',month:'long',day:'numeric'}),
-    'Days from today: ' + daysUntil(icsToDate(exam.at)),
-    '',
-    'Material I have uploaded:',
-    covered,
-    '',
-    'Key terms pulled out of that material:',
-    uniqTopics.join(', ') || '(none yet)',
-    '',
-    'Give me:',
-    '1. A day-by-day plan from today to the exam, in blocks of 45 minutes, assuming I run a business and will not do more than 2 blocks a day.',
-    '2. The highest-yield 20% of this material - what to study if I only get one session.',
-    '3. A one-page cheat sheet I could rebuild from memory.',
-    '4. 10 practice questions in the format this exam uses, then the answer key separately.',
-  ].join('\n');
-}
 
 /* ============================================================
    TRIAGE + PLANNER
@@ -1320,18 +1272,22 @@ const kindMeta = k => MATERIAL_KINDS.find(x=>x.k===k) || MATERIAL_KINDS[1];
 
 
 /* ============================================================
-   TEACH — the daily lesson
+   STUDY ENGINE — the dashboard teaches, it does not assign reading
 
-   Two sources, in priority order:
-   1. Lessons Claude wrote and pushed into the `school` row. Real teaching,
-      written against whatever has been uploaded and whichever exam is next.
-   2. A locally generated micro-lesson built from extracted definitions, so
-      this screen is never empty even before Claude has written anything.
+   Everything here runs off a "pack": a self-contained unit of teaching
+   Claude writes so the slides never have to be opened. One pack per unit:
+
+     guide     condensed study guide, the PowerPoint replacement
+     cards     term / definition drilling
+     quiz      practice questions with explanations
+     test      exam simulation, timed, feedback withheld until the end
+     match     pairs for the matching game
+     scenarios applied questions set in his own business
+
+   Modes are ranked by how much recall they demand, not how much text
+   they show. Reading is the fallback, never the default.
    ============================================================ */
 
-/* Local calendar day, not the UTC one. toISOString().slice(0,10) rolls over at
-   7pm Central, so an evening study session looked like it happened "tomorrow"
-   and the streak never counted it. */
 const dayKey = d => {
   const x = new Date(d);
   return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0')
@@ -1339,80 +1295,80 @@ const dayKey = d => {
 };
 const todayKey = () => dayKey(new Date());
 
-/* Rank courses by how much teaching they need right now: an exam close by,
-   with material uploaded, and concepts still unlearned. */
 function teachPriority(db){
   const exams = upcomingExams(db);
   return db.courses.map(c=>{
     const ex = exams.find(e=>e.course===c);
     const days = ex ? Math.max(0, daysUntil(ex.date)) : 999;
     const mats = db.materials.filter(m=>m.courseId===c.id);
-    const guides = mats.filter(m=>m.role==='guide');
+    const packs = (db.packs||[]).filter(p=>p.courseId===c.id);
     const cards = db.cards.filter(x=>x.courseId===c.id);
     const weak = cards.filter(x=>x.box<=2).length;
-    /* Closer exam = higher score; a study guide sitting unused is a big signal. */
     const urgency = days>=999 ? 0 : Math.max(5, 120 - days*5);
-    return { course:c, exam:ex, days, mats, guides, cards, weak,
-             score: urgency + guides.length*25 + Math.min(40, weak) };
+    return { course:c, exam:ex, days, mats, packs, cards, weak,
+             score: urgency + packs.length*20 + Math.min(40, weak) };
   }).sort((a,b)=>b.score-a.score);
 }
 
-/* The fallback teacher. Not as good as a written lesson, but it is real
-   content from his own slides rather than a "nothing here yet" screen. */
-function autoLesson(db){
-  const ranked = teachPriority(db);
-  const top = ranked.find(r=>r.mats.length) || ranked[0];
-  if(!top || !top.mats || !top.mats.length) return null;
-  /* Prefer a study guide, then the least-recently-taught deck. */
-  const pool = top.guides.length ? top.guides : top.mats;
-  const seed = new Date().getDate();
-  const mat = pool[seed % pool.length];
-  const defs = (mat.pack.defs||[]);
-  if(!defs.length) return null;
-  const start = (seed * 3) % defs.length;
-  const picked = [];
-  for(let i=0;i<Math.min(4, defs.length);i++) picked.push(defs[(start+i) % defs.length]);
-  return {
-    id: 'auto-'+todayKey(),
-    auto: true,
-    courseId: top.course.id,
-    title: mat.name.replace(/\.(pptx|pdf|docx|txt|md)$/i,'') + ' — 4 concepts',
-    forExam: top.exam ? top.exam.title : null,
-    days: top.days<999 ? top.days : null,
-    minutes: 6,
-    intro: 'Built automatically from your own slides. Ask Claude for a real lesson set and this gets replaced by actual teaching.',
-    blocks: picked.map(d=>({ head:d.term, body:d.def })),
-    recall: picked.slice(0,3).map(d=>({ q:'What is '+d.term+'?', a:d.def })),
-  };
+/* The pack to study right now: the unit whose exam lands soonest. */
+function activePack(db, courseId){
+  const packs = (db.packs||[]).filter(p=>!courseId || p.courseId===courseId);
+  if(!packs.length) return null;
+  const rank = teachPriority(db);
+  const order = new Map(rank.map((r,i)=>[r.course.id, i]));
+  return packs.slice().sort((a,b)=>
+    (order.get(a.courseId) ?? 99) - (order.get(b.courseId) ?? 99))[0];
 }
 
-function lessonForToday(db){
-  const log = db.lessonLog || {};
-  const queue = (db.lessons||[]).filter(l=>!log[l.id]);
-  if(queue.length){
-    /* Teach the course with the nearest exam first. */
-    const rank = teachPriority(db);
-    const order = new Map(rank.map((r,i)=>[r.course.id, i]));
-    queue.sort((a,b)=>(order.get(a.courseId) ?? 99) - (order.get(b.courseId) ?? 99)
-                    || (a.seq||0) - (b.seq||0));
-    return queue[0];
-  }
-  return autoLesson(db);
+const shuffle = a => a.map(v=>[Math.random(),v]).sort((x,y)=>x[0]-y[0]).map(v=>v[1]);
+const fmtClock = s => Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+
+/* Per-mode progress, so the hub can show what has actually been done. */
+function modeScore(db, packId, mode){
+  const r = ((db.results||{})[packId]||{})[mode];
+  return r || null;
 }
+function recordResult(setDb, packId, mode, right, total){
+  setDb(d=>{
+    const results = {...(d.results||{})};
+    const pack = {...(results[packId]||{})};
+    const prev = pack[mode];
+    pack[mode] = { right, total, pct: Math.round(right/Math.max(1,total)*100),
+                   at: new Date().toISOString(),
+                   best: Math.max(prev && prev.best || 0, Math.round(right/Math.max(1,total)*100)) };
+    results[packId] = pack;
+    return {...d, results, lessonLog:{...(d.lessonLog||{}), [packId+':'+mode]: new Date().toISOString()}};
+  });
+}
+
+/* ============================================================
+   STUDY HUB
+   ============================================================ */
+const MODES = [
+  {k:'flash',    label:'Flashcards',  blurb:'Term in, definition out. Spaced so misses come back.', icon:'◆', tone:'#5aa8ff'},
+  {k:'rapid',    label:'Rapid Fire',  blurb:'60 seconds. How many can you name?',                   icon:'⚡', tone:'#f0a63c'},
+  {k:'match',    label:'Match Up',    blurb:'Pair every term to its definition against the clock.', icon:'⧉', tone:'#b47cf0'},
+  {k:'survive',  label:'Survival',    blurb:'Streak until you miss one. Then it ends.',             icon:'☠', tone:'#ff566e'},
+  {k:'quiz',     label:'Quiz',        blurb:'Practice questions, answer explained after each.',     icon:'✎', tone:'#2fd07a'},
+  {k:'test',     label:'Exam Sim',    blurb:'Timed, no feedback until the end. The real thing.',    icon:'⚑', tone:'#e85a78'},
+  {k:'apply',    label:'Apply It',    blurb:'Scenarios from your own business. Hardest mode.',      icon:'◈', tone:'#3ecfd4'},
+  {k:'guide',    label:'Study Guide', blurb:'The condensed version. Read only if you are stuck.',   icon:'▤', tone:'#8d95a6'},
+];
 
 function TeachView({db, setDb, go}){
-  const lesson = useMemo(()=>lessonForToday(db), [db.lessons, db.lessonLog, db.materials, db.cards]);
-  const [showAnswers,setShowAnswers] = useState({});
+  const [pick,setPick] = useState(null);      /* {packId, mode} */
+  const [pickCourse,setPickCourse] = useState('');
+  const packs = db.packs || [];
+  const auto = activePack(db, pickCourse||null);
+  const pack = pick ? packs.find(p=>p.id===pick.packId) : null;
+  const ranked = useMemo(()=>teachPriority(db),[db]);
   const [copied,copy] = useCopy();
-  const log = db.lessonLog || {};
-  const doneCount = Object.keys(log).length;
-  const remaining = (db.lessons||[]).filter(l=>!log[l.id]).length;
-  const ranked = useMemo(()=>teachPriority(db), [db]);
-  const course = lesson ? db.courses.find(c=>c.id===lesson.courseId) : null;
 
-  /* Streak: consecutive days ending today with at least one lesson finished. */
+  /* Every hook has to run before the early return below, or entering a mode
+     renders fewer hooks than the hub did and React tears the tree down
+     (error #300). Keep new hooks above this line. */
   const streak = useMemo(()=>{
-    const days = new Set(Object.values(log).map(dayKey));
+    const days = new Set(Object.values(db.lessonLog||{}).map(dayKey));
     let n=0;
     for(let i=0;i<400;i++){
       const d = dayKey(new Date(startOfDay(new Date()).getTime() - i*DAY));
@@ -1421,102 +1377,69 @@ function TeachView({db, setDb, go}){
     return n;
   },[db.lessonLog]);
 
-  const finish = () => {
-    if(!lesson) return;
-    setDb(d=>({...d, lessonLog:{...(d.lessonLog||{}), [lesson.id]: new Date().toISOString()}}));
-    setShowAnswers({});
-  };
+  if(pick && pack) return (
+    <StudyRunner db={db} setDb={setDb} pack={pack} mode={pick.mode}
+      onExit={()=>setPick(null)}/>
+  );
 
   return (
     <div className="fade-in">
-      <H sub={'Short daily teaching, aimed at whatever exam is closest'}
-         right={<div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
-           <Btn ghost tone={T.accent2} onClick={()=>copy(lessonRequestPrompt(db))}>
-             {copied ? 'Copied — paste to Claude' : 'Ask Claude for more lessons'}
-           </Btn>
-         </div>}>
-        Teach me
+      <H sub="Pick how you want to learn it. Nothing here asks you to open a slide deck."
+         right={<Btn ghost tone={T.accent2} onClick={()=>copy(studyPackPrompt(db, pickCourse||null))}>
+           {copied ? 'Copied — paste to Claude' : 'Ask Claude to build a pack'}
+         </Btn>}>
+        Study
       </H>
 
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:11, marginBottom:20}}>
         <Stat label="Day streak" value={streak} tone={streak>0?T.good:T.dimmer}/>
-        <Stat label="Lessons done" value={doneCount} tone={T.text}/>
-        <Stat label="Queued" value={remaining} tone={remaining?T.accent2:T.dimmer}/>
+        <Stat label="Packs ready" value={packs.length} tone={packs.length?T.accent2:T.dimmer}/>
+        <Stat label="Cards shaky" value={db.cards.filter(c=>c.box<=2).length} tone={T.warn}/>
         <Stat label="Next exam" value={ranked[0]&&ranked[0].days<999?ranked[0].days+'d':'—'}
               tone={ranked[0]&&ranked[0].days<=7?T.bad:T.text}/>
       </div>
 
-      {!lesson ? (
-        <Card>
-          <Empty icon="▤" title="Nothing to teach from yet"
-            sub="Upload a lecture deck or a study guide under Study Lab, then hit “Ask Claude for more lessons” and paste the result back. Once material is in, this screen fills itself every day."/>
-        </Card>
+      {!packs.length ? (
+        <Card><Empty icon="◈" title="No study pack yet"
+          sub="Upload your material in the Study Lab, then hit “Ask Claude to build a pack”. You get a study guide, flashcards, quizzes, an exam simulator and games — all built from your own course, so you never open the slides."/></Card>
       ) : (
         <React.Fragment>
-          <Card style={{marginBottom:16, borderColor:(course?course.color:T.accent)+'55',
-            background:'linear-gradient(135deg,'+(course?course.color:T.accent)+'12, rgba(14,16,22,.9))'}}>
-            <div style={{display:'flex', justifyContent:'space-between', gap:14, flexWrap:'wrap', alignItems:'flex-start'}}>
-              <div style={{minWidth:0, flex:1}}>
-                <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:8}}>
-                  {course && <Pill tone={course.color}>{course.code}</Pill>}
-                  {lesson.unit && <Pill tone={T.info}>{lesson.unit}</Pill>}
-                  <Pill tone={T.dimmer}>{lesson.minutes||6} min</Pill>
-                  {lesson.auto && <Pill tone={T.warn}>auto-built</Pill>}
-                  {lesson.forExam && <Pill tone={T.bad}>{lesson.days!=null?lesson.days+'d to exam':'exam'}</Pill>}
-                </div>
-                <div style={{fontSize:20, fontWeight:800, letterSpacing:-.3}}>{lesson.title}</div>
-                {lesson.forExam && <div style={{fontSize:12, color:T.dim, marginTop:4}}>
-                  For: {lesson.forExam}</div>}
-              </div>
+          {packs.length>1 && (
+            <div style={{marginBottom:16}}>
+              <select value={pickCourse} onChange={e=>setPickCourse(e.target.value)} style={{maxWidth:340}}>
+                <option value="">Whatever is most urgent</option>
+                {db.courses.filter(c=>packs.some(p=>p.courseId===c.id)).map(c=>
+                  <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
+              </select>
             </div>
-            {lesson.intro && <div style={{fontSize:13.5, color:T.dim, marginTop:12, lineHeight:1.65}}>
-              {lesson.intro}</div>}
-          </Card>
-
-          {(lesson.blocks||[]).map((b,i)=>(
-            <Card key={i} style={{marginBottom:11}}>
-              <div style={{fontSize:15, fontWeight:750, marginBottom:7}}>
-                <span style={{color:T.dimmer, fontSize:12, marginRight:9}}>{String(i+1).padStart(2,'0')}</span>
-                {b.head}
-              </div>
-              <div style={{fontSize:14, lineHeight:1.7, color:'#cfd5e0', whiteSpace:'pre-wrap'}}>{b.body}</div>
-              {b.example && <div style={{marginTop:10, padding:'10px 13px', background:T.panel2,
-                borderLeft:'2px solid '+T.accent2, borderRadius:'0 8px 8px 0', fontSize:13, color:T.dim, lineHeight:1.65}}>
-                <strong style={{color:T.accent2}}>In practice: </strong>{b.example}</div>}
-              {b.trap && <div style={{marginTop:9, padding:'10px 13px', background:T.bad+'0f',
-                borderLeft:'2px solid '+T.bad, borderRadius:'0 8px 8px 0', fontSize:13, color:T.dim, lineHeight:1.65}}>
-                <strong style={{color:T.bad}}>Trap: </strong>{b.trap}</div>}
-            </Card>
-          ))}
-
-          {(lesson.recall||[]).length>0 && (
-            <Card style={{marginTop:18, marginBottom:14}}>
-              <div style={{fontSize:12, letterSpacing:1.2, textTransform:'uppercase', color:T.accent2,
-                fontWeight:800, marginBottom:12}}>Prove you got it</div>
-              <div style={{display:'grid', gap:10}}>
-                {lesson.recall.map((r,i)=>(
-                  <div key={i} style={{background:T.panel2, border:'1px solid '+T.line,
-                    borderRadius:10, padding:'12px 14px'}}>
-                    <div style={{fontSize:13.5, fontWeight:600, marginBottom:showAnswers[i]?9:0}}>{r.q}</div>
-                    {showAnswers[i]
-                      ? <div className="scale-in" style={{fontSize:13, color:T.good, lineHeight:1.65,
-                          paddingTop:9, borderTop:'1px solid '+T.line}}>{r.a}</div>
-                      : <button onClick={()=>setShowAnswers(s=>({...s,[i]:true}))}
-                          style={{fontSize:12, color:T.dim, marginTop:7}}>answer it out loud, then tap to check</button>}
-                  </div>
-                ))}
-              </div>
-            </Card>
           )}
 
-          <div style={{display:'flex', gap:10, flexWrap:'wrap', marginTop:6}}>
-            <Btn onClick={finish} style={{minWidth:170}}>Done — next lesson</Btn>
-            {course && <Btn ghost tone={T.line} onClick={()=>go({view:'course', courseId:course.id})}>
-              Open {course.code}</Btn>}
-            {db.cards.filter(cardDue).length>0 &&
-              <Btn ghost tone={T.accent2} onClick={()=>go({view:'review'})}>
-                Drill {db.cards.filter(cardDue).length} cards</Btn>}
-          </div>
+          {auto && <PackHeader db={db} pack={auto}/>}
+
+          {auto && (
+            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(215px,1fr))', gap:11}}>
+              {MODES.map(m=>{
+                const n = countFor(auto, m.k);
+                const sc = modeScore(db, auto.id, m.k);
+                return (
+                  <Card key={m.k} onClick={()=> n ? setPick({packId:auto.id, mode:m.k}) : null}
+                    style={{cursor:n?'pointer':'not-allowed', opacity:n?1:.4, padding:15,
+                      borderColor: sc ? m.tone+'55' : T.line}}>
+                    <div style={{display:'flex', alignItems:'center', gap:9, marginBottom:7}}>
+                      <span style={{fontSize:16, color:m.tone}}>{m.icon}</span>
+                      <span style={{fontSize:14.5, fontWeight:750}}>{m.label}</span>
+                      {sc && <span style={{marginLeft:'auto', fontSize:11.5, fontWeight:800,
+                        color: sc.best>=80?T.good:sc.best>=60?T.warn:T.bad}}>{sc.best}%</span>}
+                    </div>
+                    <div style={{fontSize:12, color:T.dim, lineHeight:1.55, minHeight:34}}>{m.blurb}</div>
+                    <div style={{fontSize:11, color:T.dimmer, marginTop:8}}>
+                      {n ? n + ' items' : 'not in this pack'}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </React.Fragment>
       )}
 
@@ -1531,10 +1454,9 @@ function TeachView({db, setDb, go}){
               <div style={{flex:1, minWidth:0}}>
                 <div style={{fontSize:13, fontWeight:650}}>{r.course.code}</div>
                 <div style={{fontSize:11, color:T.dim, marginTop:2}}>
-                  {r.mats.length} file{r.mats.length===1?'':'s'}
-                  {r.guides.length>0 && ' · '+r.guides.length+' study guide'+(r.guides.length===1?'':'s')}
-                  {r.cards.length>0 && ' · '+r.weak+' of '+r.cards.length+' cards still shaky'}
-                  {r.mats.length===0 && ' — nothing uploaded, so I cannot teach this one'}
+                  {r.packs.length ? r.packs.length+' pack'+(r.packs.length===1?'':'s')+' ready'
+                    : r.mats.length ? r.mats.length+' file'+(r.mats.length===1?'':'s')+' uploaded — no pack built yet'
+                    : 'nothing uploaded'}
                 </div>
               </div>
               {r.days<999 && <Pill tone={r.days<=7?T.bad:r.days<=21?T.warn:T.dimmer}>{r.days}d</Pill>}
@@ -1546,111 +1468,700 @@ function TeachView({db, setDb, go}){
   );
 }
 
-/* The prompt that turns Claude into the teacher. It carries the real source
-   text, so the lessons come from his slides rather than generic knowledge. */
-function lessonRequestPrompt(db){
-  const ranked = teachPriority(db).filter(r=>r.mats.length).slice(0,2);
-  const done = new Set(Object.keys(db.lessonLog||{}));
-  const taught = (db.lessons||[]).filter(l=>done.has(l.id)).map(l=>l.title);
-  const parts = [
-    'You are my teacher for this semester. I do not pay attention in class, so what you write here is where I actually learn the material. Assume zero prior exposure.',
-    '',
-    'Write me the next 5 daily lessons. Each one is 5-8 minutes of reading, and it has to be enough on its own that I could answer exam questions on it.',
-    '',
-    'Return ONLY a JSON array, no prose around it, in exactly this shape:',
-    '[{"id":"unique-string","courseId":"<course id from below>","unit":"<unit label from below>","seq":1,"title":"...",',
-    '  "forExam":"<exam name or null>","days":<int or null>,"minutes":6,',
-    '  "intro":"one sentence on why this matters for the exam",',
-    '  "blocks":[{"head":"concept","body":"the actual teaching, plain English, 3-6 sentences",',
-    '             "example":"a concrete example, ideally from running a small business",',
-    '             "trap":"what students get wrong here"}],',
-    '  "recall":[{"q":"question","a":"answer"}]}]',
-    '',
-    'Rules: 3-5 blocks per lesson. Cover the highest-yield material first - what is most likely to be ON THE TEST, not what is most interesting. Do not pad. If the source material includes a study guide, treat it as the answer key and build everything around it.',
-    '',
-  ];
-  if(taught.length) parts.push('Already taught (do not repeat): ' + taught.join(' | '), '');
-  for(const r of ranked){
-    const active = activeUnit(db, r.course);
-    parts.push('=== COURSE: ' + r.course.code + ' - ' + r.course.name + ' ===');
-    parts.push('courseId: ' + r.course.id);
-    if(r.exam) parts.push('Next exam: ' + r.exam.title + ' in ' + r.days + ' days ('
-      + fmtDate(r.exam.date,{weekday:'long',month:'long',day:'numeric'}) + ')');
-    if(active) parts.push('UNIT BEING TESTED NEXT: ' + unitLabel(active)
-      + ' — teach this unit first and set "unit" on those lessons to "' + active.label + '".');
-
-    /* Material for the unit under test gets the most room; the rest is context
-       so lessons can reference what came before without re-teaching it. */
-    const inUnit  = r.mats.filter(m => active && m.unit === active.label);
-    const outUnit = r.mats.filter(m => !(active && m.unit === active.label));
-    const emit = (list, cap) => {
-      const budget = Math.floor(cap / Math.max(1, list.length));
-      /* Study guides first and least truncated - highest-signal input there is. */
-      const ordered = [...list].sort((a,b)=>kindMeta(b.role).weight - kindMeta(a.role).weight);
-      for(const m of ordered){
-        parts.push('');
-        parts.push('--- [' + (m.unit||'Unfiled') + '] ' + kindMeta(m.role).label.toUpperCase()
-                   + ': ' + m.name + ' ---');
-        parts.push((m.text||'').slice(0, m.role==='guide' ? Math.max(budget, 20000) : budget));
-      }
-    };
-    if(inUnit.length){
-      parts.push('', '### MATERIAL FOR THE UNIT UNDER TEST');
-      emit(inUnit, 24000);
-    }
-    if(outUnit.length){
-      parts.push('', '### OTHER UNITS (background only)');
-      emit(outUnit, inUnit.length ? 6000 : 24000);
-    }
-    parts.push('');
-  }
-  return parts.join('\n');
+function countFor(pack, mode){
+  if(mode==='flash')   return (pack.cards||[]).length;
+  if(mode==='rapid')   return (pack.cards||[]).length;
+  if(mode==='survive') return (pack.cards||[]).length;
+  if(mode==='match')   return (pack.match||pack.cards||[]).length;
+  if(mode==='quiz')    return (pack.quiz||[]).length;
+  if(mode==='test')    return (pack.test||pack.quiz||[]).length;
+  if(mode==='apply')   return (pack.scenarios||[]).length;
+  if(mode==='guide')   return (pack.guide||[]).length;
+  return 0;
 }
 
-/* Paste-back: accepts the JSON array Claude returns and queues the lessons. */
-function LessonImport({db, setDb}){
+function PackHeader({db, pack}){
+  const c = db.courses.find(x=>x.id===pack.courseId);
+  return (
+    <Card style={{marginBottom:16, borderColor:(c?c.color:T.accent)+'55',
+      background:'linear-gradient(135deg,'+(c?c.color:T.accent)+'12, rgba(14,16,22,.9))'}}>
+      <div style={{display:'flex', gap:9, alignItems:'center', flexWrap:'wrap', marginBottom:8}}>
+        {c && <Pill tone={c.color}>{c.code}</Pill>}
+        {pack.unit && <Pill tone={T.info}>{pack.unit}</Pill>}
+        {pack.examDate && <Pill tone={T.bad}>{Math.max(0,daysUntil(new Date(pack.examDate)))}d to exam</Pill>}
+      </div>
+      <div style={{fontSize:19, fontWeight:800, letterSpacing:-.3}}>{pack.title}</div>
+      {pack.overview && <div style={{fontSize:13.5, color:T.dim, marginTop:7, lineHeight:1.65}}>{pack.overview}</div>}
+    </Card>
+  );
+}
+
+/* ============================================================
+   STUDY RUNNER — one component per mode, all scored
+   ============================================================ */
+function StudyRunner({db, setDb, pack, mode, onExit}){
+  const meta = MODES.find(m=>m.k===mode) || MODES[0];
+  const course = db.courses.find(c=>c.id===pack.courseId);
+  const Body = {
+    flash:   FlashMode, rapid: RapidMode, match: MatchMode, survive: SurviveMode,
+    quiz:    QuizMode,  test:  TestMode,  apply: ApplyMode, guide: GuideMode,
+  }[mode] || GuideMode;
+
+  return (
+    <div className="fade-in">
+      <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:18, flexWrap:'wrap'}}>
+        <button onClick={onExit} style={{color:T.dim, fontSize:13, fontWeight:600}}>&larr; All modes</button>
+        <div style={{width:1, height:16, background:T.line}}/>
+        <span style={{fontSize:16, color:meta.tone}}>{meta.icon}</span>
+        <span style={{fontSize:17, fontWeight:800, letterSpacing:-.2}}>{meta.label}</span>
+        {course && <Pill tone={course.color}>{course.code}</Pill>}
+        {pack.unit && <Pill tone={T.dimmer}>{pack.unit}</Pill>}
+      </div>
+      <Body db={db} setDb={setDb} pack={pack} tone={meta.tone} onExit={onExit}/>
+    </div>
+  );
+}
+
+/* Shared end screen so every mode finishes the same way. */
+function Done({right, total, tone, onAgain, onExit, note}){
+  const pct = Math.round(right/Math.max(1,total)*100);
+  const verdict = pct>=90 ? 'Exam ready on this set.'
+    : pct>=75 ? 'Close. Run the misses again.'
+    : pct>=50 ? 'Shaky. This is where your points are leaking.'
+    : 'Not there yet. Do the study guide, then come back.';
+  return (
+    <Card style={{textAlign:'center', padding:'38px 22px'}}>
+      <div style={{fontSize:52, fontWeight:900, lineHeight:1,
+        color: pct>=75?T.good:pct>=50?T.warn:T.bad}}>{pct}%</div>
+      <div style={{fontSize:14, color:T.dim, marginTop:8}}>{right} of {total}</div>
+      <div style={{fontSize:14.5, marginTop:14, maxWidth:420, marginLeft:'auto', marginRight:'auto',
+        lineHeight:1.6}}>{verdict}</div>
+      {note && <div style={{fontSize:12.5, color:T.dim, marginTop:10}}>{note}</div>}
+      <div style={{marginTop:20, display:'flex', gap:9, justifyContent:'center', flexWrap:'wrap'}}>
+        <Btn tone={tone} onClick={onAgain}>Run it again</Btn>
+        <Btn ghost tone={T.line} onClick={onExit}>Back to modes</Btn>
+      </div>
+    </Card>
+  );
+}
+
+const Bar = ({i, n, tone}) => (
+  <div style={{height:3, background:T.line, borderRadius:2, marginBottom:18, overflow:'hidden'}}>
+    <div style={{height:'100%', width:((i/Math.max(1,n))*100)+'%', background:tone, transition:'width .25s'}}/>
+  </div>
+);
+
+/* Build multiple choice from a card set by borrowing other backs as distractors. */
+function mcFromCards(cards, n){
+  const pool = shuffle(cards).slice(0, n);
+  return pool.map(c=>{
+    const wrong = shuffle(cards.filter(x=>x.back!==c.back)).slice(0,3).map(x=>x.back);
+    return { q:c.front, choices: shuffle([c.back, ...wrong]), answer:c.back, why:null };
+  });
+}
+
+/* ---------- Flashcards ---------- */
+function FlashMode({db, setDb, pack, tone, onExit}){
+  const cards = pack.cards || [];
+  const [queue,setQueue] = useState(()=>shuffle(cards));
+  const [i,setI] = useState(0); const [show,setShow] = useState(false);
+  const [tally,setTally] = useState({r:0,w:0});
+  const c = queue[i];
+  const answer = ok => { setTally(t=>({r:t.r+(ok?1:0), w:t.w+(ok?0:1)})); setShow(false); setI(x=>x+1); };
+  useEffect(()=>{
+    const k=e=>{ if(!c) return;
+      if(e.code==='Space'){ e.preventDefault(); setShow(s=>!s); }
+      if(show && (e.key==='1')) answer(false);
+      if(show && (e.key==='2')) answer(true); };
+    window.addEventListener('keydown',k); return ()=>window.removeEventListener('keydown',k);
+  },[c,show]);
+  if(!c) return <Done right={tally.r} total={tally.r+tally.w} tone={tone}
+    onAgain={()=>{setQueue(shuffle(cards)); setI(0); setTally({r:0,w:0});}} onExit={onExit}
+    note="space flips · 1 missed · 2 got it"/>;
+  return (
+    <div>
+      <Bar i={i} n={queue.length} tone={tone}/>
+      <Card style={{minHeight:230, display:'flex', alignItems:'center', justifyContent:'center',
+        padding:'34px 24px', cursor:'pointer'}} onClick={()=>setShow(s=>!s)}>
+        <div style={{textAlign:'center'}}>
+          <div style={{fontSize:11, color:T.dimmer, letterSpacing:1, textTransform:'uppercase'}}>
+            {i+1} of {queue.length}</div>
+          <div style={{fontSize:20, fontWeight:700, marginTop:14, lineHeight:1.5}}>{c.front}</div>
+          {show
+            ? <div className="scale-in" style={{marginTop:20, paddingTop:18, borderTop:'1px solid '+T.line,
+                fontSize:16, color:tone, lineHeight:1.65}}>{c.back}</div>
+            : <div style={{marginTop:20, fontSize:12, color:T.dimmer}}>tap or press space</div>}
+        </div>
+      </Card>
+      {show && <div style={{display:'flex', gap:10, marginTop:14, justifyContent:'center'}}>
+        <Btn tone={T.bad} onClick={()=>answer(false)} style={{minWidth:150}}>Missed it</Btn>
+        <Btn tone={T.good} onClick={()=>answer(true)} style={{minWidth:150}}>Got it</Btn>
+      </div>}
+    </div>
+  );
+}
+
+/* ---------- Rapid Fire: 60 seconds, how many can you name ---------- */
+function RapidMode({db, setDb, pack, tone, onExit}){
+  const cards = pack.cards || [];
+  const [state,setState] = useState('ready');
+  const [left,setLeft] = useState(60);
+  const [queue,setQueue] = useState([]); const [i,setI] = useState(0);
+  const [show,setShow] = useState(false); const [hit,setHit] = useState(0);
+  useEffect(()=>{
+    if(state!=='run') return;
+    if(left<=0){ setState('done'); recordResult(setDb, pack.id, 'rapid', hit, Math.max(hit,i)); return; }
+    const t=setTimeout(()=>setLeft(l=>l-1),1000); return ()=>clearTimeout(t);
+  },[state,left]);
+  const start=()=>{ setQueue(shuffle(cards)); setI(0); setHit(0); setLeft(60); setShow(false); setState('run'); };
+  const next=ok=>{ if(ok) setHit(h=>h+1); setShow(false); setI(x=>x+1); };
+  if(state==='ready') return (
+    <Card style={{textAlign:'center', padding:'40px 22px'}}>
+      <div style={{fontSize:44}}>⚡</div>
+      <div style={{fontSize:19, fontWeight:800, marginTop:10}}>60 seconds on the clock</div>
+      <p style={{fontSize:14, color:T.dim, maxWidth:400, margin:'10px auto 0', lineHeight:1.65}}>
+        A term appears. Say the definition out loud, flip, and mark yourself. Speed is the point —
+        if you have to think for more than three seconds, it counts as a miss.
+      </p>
+      <div style={{marginTop:20}}><Btn tone={tone} onClick={start} style={{minWidth:180}}>Start</Btn></div>
+    </Card>
+  );
+  if(state==='done') return <Done right={hit} total={Math.max(hit,i)} tone={tone}
+    onAgain={start} onExit={onExit} note={hit + ' terms in 60 seconds'}/>;
+  const c = queue[i];
+  if(!c){ return <Done right={hit} total={Math.max(hit,i)} tone={tone} onAgain={start} onExit={onExit}
+    note="You cleared the whole deck before the clock ran out."/>; }
+  return (
+    <div>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14}}>
+        <div style={{fontSize:30, fontWeight:900, fontVariantNumeric:'tabular-nums',
+          color:left<=10?T.bad:T.text}}>{fmtClock(left)}</div>
+        <div style={{fontSize:14, color:T.dim}}>{hit} correct</div>
+      </div>
+      <Card style={{minHeight:190, display:'flex', alignItems:'center', justifyContent:'center',
+        padding:'28px 22px', cursor:'pointer'}} onClick={()=>setShow(true)}>
+        <div style={{textAlign:'center'}}>
+          <div style={{fontSize:20, fontWeight:750, lineHeight:1.45}}>{c.front}</div>
+          {show && <div className="scale-in" style={{marginTop:16, paddingTop:14,
+            borderTop:'1px solid '+T.line, fontSize:15, color:tone, lineHeight:1.6}}>{c.back}</div>}
+        </div>
+      </Card>
+      <div style={{display:'flex', gap:10, marginTop:13, justifyContent:'center'}}>
+        {show
+          ? <React.Fragment>
+              <Btn tone={T.bad} onClick={()=>next(false)} style={{minWidth:140}}>Missed</Btn>
+              <Btn tone={T.good} onClick={()=>next(true)} style={{minWidth:140}}>Got it</Btn>
+            </React.Fragment>
+          : <Btn ghost tone={T.line} onClick={()=>setShow(true)} style={{minWidth:180}}>Reveal</Btn>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Match Up ---------- */
+function MatchMode({db, setDb, pack, tone, onExit}){
+  const source = (pack.match && pack.match.length ? pack.match
+    : (pack.cards||[]).map(c=>({term:c.front, def:c.back})));
+  const ROUND = 6;
+  const [round,setRound] = useState(()=>shuffle(source).slice(0,ROUND));
+  const [terms,setTerms] = useState([]); const [defs,setDefs] = useState([]);
+  const [sel,setSel] = useState(null); const [done,setDone] = useState([]);
+  const [wrong,setWrong] = useState(null); const [secs,setSecs] = useState(0);
+  const [fin,setFin] = useState(false); const [misses,setMisses] = useState(0);
+  useEffect(()=>{ setTerms(shuffle(round.map((r,i)=>({...r,i})))); setDefs(shuffle(round.map((r,i)=>({...r,i})))); },[round]);
+  useEffect(()=>{ if(fin) return; const t=setTimeout(()=>setSecs(s=>s+1),1000); return ()=>clearTimeout(t); },[secs,fin]);
+  useEffect(()=>{ if(round.length && done.length===round.length && !fin){
+    setFin(true); recordResult(setDb, pack.id, 'match', round.length, round.length+misses); } },[done]);
+  const tap=(side,item)=>{
+    if(done.includes(item.i)) return;
+    if(!sel){ setSel({side,item}); return; }
+    if(sel.side===side){ setSel({side,item}); return; }
+    if(sel.item.i===item.i){ setDone(d=>[...d,item.i]); setSel(null); }
+    else { setWrong(item.i); setMisses(m=>m+1); setTimeout(()=>{setWrong(null); setSel(null);},450); }
+  };
+  const again=()=>{ setRound(shuffle(source).slice(0,ROUND)); setDone([]); setSel(null);
+    setSecs(0); setFin(false); setMisses(0); };
+  if(fin) return <Done right={round.length} total={round.length+misses} tone={tone}
+    onAgain={again} onExit={onExit} note={'Cleared in ' + fmtClock(secs) + ' with ' + misses + ' wrong taps'}/>;
+  const col = (list,side) => (
+    <div style={{display:'grid', gap:8}}>
+      {list.map(item=>{
+        const isDone = done.includes(item.i);
+        const isSel = sel && sel.side===side && sel.item.i===item.i;
+        const isWrong = wrong===item.i;
+        return (
+          <button key={side+item.i} onClick={()=>tap(side,item)} disabled={isDone}
+            style={{textAlign:'left', padding:'11px 13px', borderRadius:10, fontSize:13, lineHeight:1.5,
+              background: isDone ? T.good+'18' : isWrong ? T.bad+'22' : isSel ? tone+'22' : T.panel2,
+              border:'1px solid '+(isDone?T.good+'55':isWrong?T.bad:isSel?tone:T.line),
+              color: isDone ? T.dimmer : T.text, opacity:isDone?.5:1, transition:'all .12s',
+              cursor:isDone?'default':'pointer'}}>
+            {side==='t' ? item.term : item.def}
+          </button>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div>
+      <div style={{display:'flex', justifyContent:'space-between', marginBottom:14, alignItems:'center'}}>
+        <div style={{fontSize:13, color:T.dim}}>{done.length} of {round.length} paired</div>
+        <div style={{fontSize:20, fontWeight:800, fontVariantNumeric:'tabular-nums'}}>{fmtClock(secs)}</div>
+      </div>
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:11}}>
+        {col(terms,'t')}{col(defs,'d')}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Survival ---------- */
+function SurviveMode({db, setDb, pack, tone, onExit}){
+  const cards = pack.cards || [];
+  const [qs,setQs] = useState(()=>mcFromCards(cards, cards.length));
+  const [i,setI] = useState(0); const [best,setBest] = useState(0);
+  const [dead,setDead] = useState(false); const [chosen,setChosen] = useState(null);
+  const q = qs[i];
+  const pickOne = ch => {
+    setChosen(ch);
+    setTimeout(()=>{
+      if(ch===q.answer){ setBest(b=>b+1); setI(x=>x+1); setChosen(null); }
+      else { setDead(true); recordResult(setDb, pack.id, 'survive', i, qs.length); }
+    }, 520);
+  };
+  const again=()=>{ setQs(mcFromCards(cards, cards.length)); setI(0); setBest(0); setDead(false); setChosen(null); };
+  if(dead || !q) return (
+    <Card style={{textAlign:'center', padding:'38px 22px'}}>
+      <div style={{fontSize:46}}>{dead?'☠':'🏆'}</div>
+      <div style={{fontSize:44, fontWeight:900, marginTop:8, color:tone}}>{best}</div>
+      <div style={{fontSize:14, color:T.dim, marginTop:4}}>
+        {dead ? 'in a row before it ended' : 'perfect run — you cleared the deck'}</div>
+      {dead && q && <div style={{marginTop:16, padding:'12px 15px', background:T.panel2,
+        border:'1px solid '+T.line, borderRadius:10, textAlign:'left', maxWidth:460,
+        marginLeft:'auto', marginRight:'auto'}}>
+        <div style={{fontSize:12, color:T.dimmer, marginBottom:5}}>The one that got you</div>
+        <div style={{fontSize:13.5, fontWeight:600}}>{q.q}</div>
+        <div style={{fontSize:13, color:T.good, marginTop:6}}>{q.answer}</div>
+      </div>}
+      <div style={{marginTop:20, display:'flex', gap:9, justifyContent:'center', flexWrap:'wrap'}}>
+        <Btn tone={tone} onClick={again}>Try again</Btn>
+        <Btn ghost tone={T.line} onClick={onExit}>Back to modes</Btn>
+      </div>
+    </Card>
+  );
+  return (
+    <div>
+      <div style={{display:'flex', justifyContent:'space-between', marginBottom:16, alignItems:'center'}}>
+        <div style={{fontSize:13, color:T.dim}}>Streak</div>
+        <div style={{fontSize:26, fontWeight:900, color:tone}}>{best}</div>
+      </div>
+      <Card style={{padding:'22px 20px', marginBottom:13}}>
+        <div style={{fontSize:17, fontWeight:700, lineHeight:1.5}}>{q.q}</div>
+      </Card>
+      <div style={{display:'grid', gap:9}}>
+        {q.choices.map((ch,k)=>{
+          const isPick = chosen===ch;
+          const reveal = chosen!==null;
+          const good = reveal && ch===q.answer;
+          const bad = reveal && isPick && ch!==q.answer;
+          return (
+            <button key={k} onClick={()=>chosen===null && pickOne(ch)}
+              style={{textAlign:'left', padding:'13px 15px', borderRadius:10, fontSize:14, lineHeight:1.55,
+                background: good ? T.good+'1e' : bad ? T.bad+'1e' : T.panel2,
+                border:'1px solid '+(good?T.good:bad?T.bad:T.line), color:T.text,
+                cursor:reveal?'default':'pointer', transition:'all .12s'}}>{ch}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Quiz: feedback after each ---------- */
+function QuizMode({db, setDb, pack, tone, onExit}){
+  const src = pack.quiz || [];
+  const [qs,setQs] = useState(()=>shuffle(src));
+  const [i,setI] = useState(0); const [chosen,setChosen] = useState(null);
+  const [tally,setTally] = useState({r:0,w:0});
+  const q = qs[i];
+  const again=()=>{ setQs(shuffle(src)); setI(0); setChosen(null); setTally({r:0,w:0}); };
+  if(!q){ return <Done right={tally.r} total={tally.r+tally.w} tone={tone} onAgain={again} onExit={onExit}/>; }
+  const next=()=>{ setChosen(null); setI(x=>x+1); };
+  return (
+    <div>
+      <Bar i={i} n={qs.length} tone={tone}/>
+      <div style={{fontSize:11.5, color:T.dimmer, marginBottom:9}}>Question {i+1} of {qs.length}</div>
+      <Card style={{padding:'20px', marginBottom:13}}>
+        <div style={{fontSize:16.5, fontWeight:700, lineHeight:1.55}}>{q.q}</div>
+      </Card>
+      <div style={{display:'grid', gap:9}}>
+        {(q.choices||[]).map((ch,k)=>{
+          const reveal = chosen!==null;
+          const good = reveal && ch===q.answer;
+          const bad = reveal && chosen===ch && ch!==q.answer;
+          return (
+            <button key={k} onClick={()=>{ if(reveal) return;
+                setChosen(ch);
+                setTally(t=>({r:t.r+(ch===q.answer?1:0), w:t.w+(ch===q.answer?0:1)}));
+                if(i===qs.length-1) recordResult(setDb, pack.id, 'quiz',
+                  tally.r+(ch===q.answer?1:0), qs.length); }}
+              style={{textAlign:'left', padding:'13px 15px', borderRadius:10, fontSize:14, lineHeight:1.55,
+                background: good ? T.good+'1e' : bad ? T.bad+'1e' : T.panel2,
+                border:'1px solid '+(good?T.good:bad?T.bad:T.line), color:T.text,
+                cursor:reveal?'default':'pointer'}}>{ch}</button>
+          );
+        })}
+      </div>
+      {chosen!==null && (
+        <div className="scale-in" style={{marginTop:14}}>
+          {q.why && <div style={{background:T.panel2, border:'1px solid '+T.line, borderRadius:10,
+            padding:'13px 15px', fontSize:13.5, color:T.dim, lineHeight:1.65}}>
+            <strong style={{color: chosen===q.answer?T.good:T.bad}}>
+              {chosen===q.answer?'Right. ':'Not quite. '}</strong>{q.why}</div>}
+          <div style={{marginTop:12}}><Btn tone={tone} onClick={next}>
+            {i===qs.length-1?'See score':'Next question'}</Btn></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Exam simulation: timed, no feedback until the end ---------- */
+function TestMode({db, setDb, pack, tone, onExit}){
+  const src = (pack.test && pack.test.length ? pack.test : pack.quiz) || [];
+  const MIN = Math.max(5, Math.ceil(src.length * 1.2));
+  const [phase,setPhase] = useState('ready');
+  const [qs,setQs] = useState([]); const [ans,setAns] = useState({});
+  const [i,setI] = useState(0); const [left,setLeft] = useState(MIN*60);
+  useEffect(()=>{
+    if(phase!=='run') return;
+    if(left<=0){ finish(); return; }
+    const t=setTimeout(()=>setLeft(l=>l-1),1000); return ()=>clearTimeout(t);
+  },[phase,left]);
+  const start=()=>{ setQs(shuffle(src)); setAns({}); setI(0); setLeft(MIN*60); setPhase('run'); };
+  const finish=()=>{
+    const right = qs.reduce((n,q,k)=>n+((ans[k]===q.answer)?1:0),0);
+    recordResult(setDb, pack.id, 'test', right, qs.length);
+    setPhase('done');
+  };
+  if(phase==='ready') return (
+    <Card style={{textAlign:'center', padding:'40px 22px'}}>
+      <div style={{fontSize:44}}>⚑</div>
+      <div style={{fontSize:19, fontWeight:800, marginTop:10}}>{src.length} questions · {MIN} minutes</div>
+      <p style={{fontSize:14, color:T.dim, maxWidth:420, margin:'10px auto 0', lineHeight:1.65}}>
+        No feedback until you submit, same as the real one. Close your notes. If you cannot pass this,
+        you are not ready — and it is better to find that out here.
+      </p>
+      <div style={{marginTop:20}}><Btn tone={tone} onClick={start} style={{minWidth:180}}>Begin</Btn></div>
+    </Card>
+  );
+  if(phase==='done'){
+    const right = qs.reduce((n,q,k)=>n+((ans[k]===q.answer)?1:0),0);
+    return (
+      <div>
+        <Done right={right} total={qs.length} tone={tone} onAgain={start} onExit={onExit}/>
+        <div style={{marginTop:20, display:'grid', gap:9}}>
+          <div style={{fontSize:12, letterSpacing:1, textTransform:'uppercase', color:T.dim, fontWeight:700}}>
+            Review</div>
+          {qs.map((q,k)=>{
+            const ok = ans[k]===q.answer;
+            return (
+              <Card key={k} style={{padding:14, borderColor:(ok?T.good:T.bad)+'44'}}>
+                <div style={{display:'flex', gap:9, alignItems:'flex-start'}}>
+                  <span style={{color:ok?T.good:T.bad, fontWeight:900, fontSize:14}}>{ok?'✓':'✕'}</span>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:13.5, fontWeight:650}}>{q.q}</div>
+                    {!ok && <div style={{fontSize:12.5, color:T.bad, marginTop:5}}>
+                      You put: {ans[k] || '(blank)'}</div>}
+                    <div style={{fontSize:12.5, color:T.good, marginTop:4}}>{q.answer}</div>
+                    {q.why && <div style={{fontSize:12.5, color:T.dim, marginTop:6, lineHeight:1.6}}>{q.why}</div>}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+  const q = qs[i];
+  return (
+    <div>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12}}>
+        <div style={{fontSize:12.5, color:T.dim}}>{i+1} / {qs.length}</div>
+        <div style={{fontSize:22, fontWeight:800, fontVariantNumeric:'tabular-nums',
+          color:left<=60?T.bad:T.text}}>{fmtClock(left)}</div>
+      </div>
+      <Bar i={i} n={qs.length} tone={tone}/>
+      <Card style={{padding:'20px', marginBottom:13}}>
+        <div style={{fontSize:16.5, fontWeight:700, lineHeight:1.55}}>{q.q}</div>
+      </Card>
+      <div style={{display:'grid', gap:9}}>
+        {(q.choices||[]).map((ch,k)=>(
+          <button key={k} onClick={()=>setAns(a=>({...a,[i]:ch}))}
+            style={{textAlign:'left', padding:'13px 15px', borderRadius:10, fontSize:14, lineHeight:1.55,
+              background: ans[i]===ch ? tone+'22' : T.panel2,
+              border:'1px solid '+(ans[i]===ch?tone:T.line), color:T.text}}>{ch}</button>
+        ))}
+      </div>
+      <div style={{display:'flex', gap:9, marginTop:16, flexWrap:'wrap'}}>
+        {i>0 && <Btn ghost tone={T.line} onClick={()=>setI(x=>x-1)}>Back</Btn>}
+        {i<qs.length-1
+          ? <Btn tone={tone} onClick={()=>setI(x=>x+1)}>Next</Btn>
+          : <Btn tone={T.bad} onClick={finish}>Submit exam</Btn>}
+        <span style={{fontSize:12, color:T.dimmer, alignSelf:'center'}}>
+          {Object.keys(ans).length} of {qs.length} answered</span>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Apply It: scenarios, self-graded ---------- */
+function ApplyMode({db, setDb, pack, tone, onExit}){
+  const src = pack.scenarios || [];
+  const [i,setI] = useState(0); const [show,setShow] = useState(false);
+  const [tally,setTally] = useState({r:0,w:0});
+  const s = src[i];
+  const again=()=>{ setI(0); setShow(false); setTally({r:0,w:0}); };
+  if(!s) return <Done right={tally.r} total={tally.r+tally.w} tone={tone} onAgain={again} onExit={onExit}
+    note="Self-graded. Be honest or this mode is worthless."/>;
+  const mark=ok=>{ setTally(t=>({r:t.r+(ok?1:0), w:t.w+(ok?0:1)}));
+    if(i===src.length-1) recordResult(setDb, pack.id, 'apply', tally.r+(ok?1:0), src.length);
+    setShow(false); setI(x=>x+1); };
+  return (
+    <div>
+      <Bar i={i} n={src.length} tone={tone}/>
+      <Card style={{padding:'20px', marginBottom:13}}>
+        <div style={{fontSize:11.5, color:T.dimmer, letterSpacing:1, textTransform:'uppercase',
+          marginBottom:9}}>Scenario {i+1} of {src.length}</div>
+        <div style={{fontSize:15, lineHeight:1.7, color:'#cfd5e0'}}>{s.setup}</div>
+        <div style={{fontSize:16, fontWeight:700, marginTop:14, lineHeight:1.55}}>{s.ask}</div>
+      </Card>
+      {show
+        ? <div className="scale-in">
+            <Card style={{borderColor:tone+'55', background:tone+'0c'}}>
+              <div style={{fontSize:11.5, color:tone, letterSpacing:1, textTransform:'uppercase',
+                fontWeight:700, marginBottom:8}}>What a full-credit answer says</div>
+              <div style={{fontSize:14.5, lineHeight:1.7}}>{s.answer}</div>
+            </Card>
+            <div style={{display:'flex', gap:10, marginTop:13, justifyContent:'center'}}>
+              <Btn tone={T.bad} onClick={()=>mark(false)} style={{minWidth:150}}>I missed it</Btn>
+              <Btn tone={T.good} onClick={()=>mark(true)} style={{minWidth:150}}>I had that</Btn>
+            </div>
+          </div>
+        : <div style={{textAlign:'center'}}>
+            <p style={{fontSize:13, color:T.dim, marginBottom:12}}>
+              Answer it out loud first. Then check.</p>
+            <Btn tone={tone} onClick={()=>setShow(true)} style={{minWidth:190}}>Show the answer</Btn>
+          </div>}
+    </div>
+  );
+}
+
+/* ---------- Study guide: the fallback, not the default ---------- */
+function GuideMode({db, setDb, pack, tone, onExit}){
+  const g = pack.guide || [];
+  return (
+    <div>
+      <Card style={{marginBottom:14, borderColor:T.warn+'44', background:T.warn+'0a'}}>
+        <div style={{fontSize:13.5, color:T.dim, lineHeight:1.65}}>
+          Reading is the weakest way to learn this. Use it to patch what you missed in the other modes,
+          then get back to Quiz or Exam Sim.
+        </div>
+      </Card>
+      <div style={{display:'grid', gap:11}}>
+        {g.map((s,i)=>(
+          <Card key={i}>
+            <div style={{fontSize:15, fontWeight:750, marginBottom:9}}>{s.head}</div>
+            {s.must && <div style={{fontSize:13, color:T.accent2, marginBottom:9, lineHeight:1.6}}>
+              <strong>Must know: </strong>{s.must}</div>}
+            <ul style={{margin:0, paddingLeft:19, display:'grid', gap:6}}>
+              {(s.points||[]).map((p,j)=><li key={j} style={{fontSize:13.5, color:T.dim, lineHeight:1.65}}>{p}</li>)}
+            </ul>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   THE PROMPT — asks Claude to build a teaching pack, not an essay
+
+   The old version asked for prose lessons, which just moved the reading
+   from the slides into the dashboard. This asks for the things you can
+   actually practise against: cards, questions, an exam, games, scenarios.
+   ============================================================ */
+function studyPackPrompt(db, courseId){
+  const ranked = teachPriority(db).filter(r=>r.mats.length && (!courseId || r.course.id===courseId));
+  const r = ranked[0];
+  if(!r) return 'Upload some course material in the Study Lab first — there is nothing to build a pack from yet.';
+  const active = activeUnit(db, r.course);
+  const have = (db.packs||[]).filter(p=>p.courseId===r.course.id).map(p=>p.title);
+
+  const P = [];
+  P.push('Build me a complete STUDY PACK. I do not learn by reading slides — I learn by being quizzed, drilled and tested. Assume I will never open the PowerPoint. Everything I need has to be inside this pack.');
+  P.push('');
+  P.push('Course: ' + r.course.code + ' — ' + r.course.name);
+  P.push('courseId: ' + r.course.id);
+  if(active) P.push('Unit: ' + unitLabel(active));
+  if(r.exam) P.push('Exam: ' + r.exam.title + ' in ' + r.days + ' days ('
+    + fmtDate(r.exam.date,{weekday:'long', month:'long', day:'numeric'}) + ')');
+  if(have.length) P.push('Packs I already have (build a different one): ' + have.join(' | '));
+  P.push('');
+  P.push('Return ONLY a JSON object. No prose before or after it. This exact shape:');
+  P.push('');
+  P.push('{');
+  P.push('  "id": "unique-slug",');
+  P.push('  "courseId": "' + r.course.id + '",');
+  P.push('  "unit": "' + (active ? active.label : '') + '",');
+  P.push('  "title": "short name for this pack",');
+  P.push('  "overview": "2 sentences on what this unit is really about and what the exam will push on",');
+  P.push('  "examDate": "YYYY-MM-DD or null",');
+  P.push('');
+  P.push('  "guide": [ { "head": "section", "must": "the single sentence worth memorising",');
+  P.push('               "points": ["tight bullet", "tight bullet"] } ],');
+  P.push('');
+  P.push('  "cards": [ { "front": "term or question", "back": "the answer, one or two lines max" } ],');
+  P.push('');
+  P.push('  "match": [ { "term": "short term", "def": "short definition, under 12 words" } ],');
+  P.push('');
+  P.push('  "quiz": [ { "q": "question", "choices": ["a","b","c","d"], "answer": "the exact correct string from choices",');
+  P.push('              "why": "why it is right AND why the tempting wrong one is wrong" } ],');
+  P.push('');
+  P.push('  "test": [ { "q": "...", "choices": [...], "answer": "...", "why": "..." } ],');
+  P.push('');
+  P.push('  "scenarios": [ { "setup": "a situation in Habib\'s mobile auto-detailing business",');
+  P.push('                   "ask": "the question", "answer": "what a full-credit answer contains" } ]');
+  P.push('}');
+  P.push('');
+  P.push('Volume: 8-14 guide sections, 25-40 cards, 12-20 match pairs (SHORT text — they sit in a grid),');
+  P.push('15-20 quiz questions, 20-30 test questions that are harder than the quiz, 5-8 scenarios.');
+  P.push('');
+  P.push('Rules:');
+  P.push('- "answer" must be character-for-character identical to one of the "choices".');
+  P.push('- Wrong choices must be plausible. Use the actual confusable terms from the material, not filler.');
+  P.push('- Every "why" teaches something. That is where the real instruction lives, not in the guide.');
+  P.push('- If the material has formulas or calculations, at least a quarter of the quiz and test must be computational, with the arithmetic worked in "why".');
+  P.push('- Cover the whole unit, weighted toward what an exam actually asks.');
+  P.push('- Plain language. I run a business and do not care for textbook phrasing.');
+  P.push('');
+
+  /* Study guides first and least truncated; they are the professor telling you the answer. */
+  const inUnit  = r.mats.filter(m => active && m.unit === active.label);
+  const pool = inUnit.length ? inUnit : r.mats;
+  const emit = (list, cap) => {
+    const budget = Math.floor(cap / Math.max(1, list.length));
+    const ordered = [...list].sort((a,b)=>kindMeta(b.role).weight - kindMeta(a.role).weight);
+    for(const m of ordered){
+      P.push('');
+      P.push('--- [' + (m.unit||'Unfiled') + '] ' + kindMeta(m.role).label.toUpperCase() + ': ' + m.name + ' ---');
+      P.push((m.text||'').slice(0, m.role==='guide' ? Math.max(budget, 20000) : budget));
+    }
+  };
+  P.push('=== SOURCE MATERIAL ===');
+  emit(pool, 30000);
+  return P.join('\n');
+}
+
+/* Kept for the single-material button in the Study Lab. */
+function teachPrompt(mat, course){
+  const body = (mat.pack.sections||[]).map(s =>
+    '## ' + s.head + '\n' + (s.points||[]).map(p=>'- '+p).join('\n')
+  ).join('\n\n');
+  return [
+    'Turn this one file into a study pack I can drill against. I will not be reading the slides.',
+    'Course: ' + (course ? course.code + ' - ' + course.name : 'unknown'),
+    'Material: ' + mat.name + (mat.unit ? '  (unit: ' + mat.unit + ')' : ''),
+    '',
+    'Return ONLY a JSON object shaped like the one the Study tab asks for:',
+    'id, courseId ("' + (course?course.id:'') + '"), unit, title, overview, guide[], cards[], match[], quiz[], test[], scenarios[].',
+    'Weight it toward questions and drills. The guide is the smallest part.',
+    '',
+    '--- SOURCE ---',
+    body.slice(0, 24000),
+  ].join('\n');
+}
+
+/* Exam-week version: same pack shape, tuned to a specific test date. */
+function examPrompt(course, exam, mats, events){
+  const covered = mats.map(m=>'- ' + m.name + (m.unit ? ' (' + m.unit + ')' : '')).join('\n') || '- (nothing uploaded yet)';
+  return [
+    'I have an exam and I need to be drilled, not lectured.',
+    'Course: ' + course.code + ' - ' + course.name,
+    'Exam: ' + exam.title,
+    'Date: ' + fmtDate(icsToDate(exam.at), {weekday:'long', month:'long', day:'numeric'}),
+    'Days from today: ' + daysUntil(icsToDate(exam.at)),
+    '',
+    'Material I have uploaded:',
+    covered,
+    '',
+    'Give me two things:',
+    '1. A day-by-day plan in 45-minute blocks. I run a business, Saturdays are unavailable, and two blocks a day is the ceiling.',
+    '2. A full study pack as a JSON object — id, courseId ("' + course.id + '"), unit, title, overview, examDate, guide[], cards[], match[], quiz[], test[], scenarios[] — so I can load it into my dashboard and drill it.',
+    '',
+    'Weight everything toward the highest-yield 20%. Computational material gets worked arithmetic in every "why".',
+  ].join('\n');
+}
+
+/* Paste-back: accepts either one pack object or an array of them. */
+function PackImport({db, setDb}){
   const [raw,setRaw] = useState('');
   const [msg,setMsg] = useState('');
   const load = () => {
     setMsg('');
     try{
-      /* Tolerate a fenced code block or stray prose around the array. */
       let t = raw.trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
-      const s = t.indexOf('['), e = t.lastIndexOf(']');
-      if(s>-1 && e>s) t = t.slice(s, e+1);
-      const arr = JSON.parse(t);
-      if(!Array.isArray(arr) || !arr.length) throw new Error('that is not a lesson array');
-      const valid = arr.filter(l=>l && l.title && Array.isArray(l.blocks) && l.blocks.length);
-      if(!valid.length) throw new Error('no lesson in there had a title and blocks');
+      const a = t.indexOf('['), o = t.indexOf('{');
+      const start = (a>-1 && (a<o || o===-1)) ? a : o;
+      const endCh = (start===a) ? ']' : '}';
+      const end = t.lastIndexOf(endCh);
+      if(start>-1 && end>start) t = t.slice(start, end+1);
+      let arr = JSON.parse(t);
+      if(!Array.isArray(arr)) arr = [arr];
       const known = new Set(db.courses.map(c=>c.id));
-      const clean = valid.map((l,i)=>({
-        ...l,
-        id: String(l.id || ('lesson-'+Date.now()+'-'+i)),
-        courseId: known.has(l.courseId) ? l.courseId : db.courses[0].id,
-        seq: l.seq || i+1,
-        minutes: l.minutes || 6,
+      const clean = arr.filter(p=>p && p.title).map((p,i)=>({
+        ...p,
+        id: String(p.id || ('pack-'+Date.now()+'-'+i)),
+        courseId: known.has(p.courseId) ? p.courseId : db.courses[0].id,
+        cards: p.cards||[], quiz: p.quiz||[], test: p.test||[],
+        match: p.match||[], scenarios: p.scenarios||[], guide: p.guide||[],
       }));
+      if(!clean.length) throw new Error('no pack in there had a title');
+      /* A pack whose "answer" is not one of its "choices" can never be scored. */
+      let fixed = 0;
+      for(const p of clean){
+        for(const list of [p.quiz, p.test]){
+          for(const q of list){
+            if(q.choices && q.answer && !q.choices.includes(q.answer)){ q.choices = [...q.choices, q.answer]; fixed++; }
+          }
+        }
+      }
       setDb(d=>{
-        const have = new Set((d.lessons||[]).map(l=>l.id));
-        const add = clean.filter(l=>!have.has(l.id));
-        return {...d, lessons:[...(d.lessons||[]), ...add]};
+        const have = new Set((d.packs||[]).map(p=>p.id));
+        return {...d, packs:[...(d.packs||[]).filter(p=>!clean.some(c=>c.id===p.id)),
+                             ...clean.filter(p=>true)]};
       });
-      setMsg('Queued ' + clean.length + ' lesson' + (clean.length===1?'':'s') + '. Open Teach me.');
+      const c0 = clean[0];
+      setMsg('Loaded "' + c0.title + '" — ' + (c0.cards||[]).length + ' cards, '
+        + (c0.quiz||[]).length + ' quiz, ' + (c0.test||[]).length + ' test, '
+        + (c0.scenarios||[]).length + ' scenarios.'
+        + (fixed ? ' Repaired ' + fixed + ' question(s) whose answer was missing from its choices.' : ''));
       setRaw('');
     }catch(e){ setMsg('Could not read that: ' + e.message); }
   };
   return (
     <div>
       <textarea rows={5} value={raw} onChange={e=>setRaw(e.target.value)}
-        placeholder='Paste the JSON array Claude gave you...' style={{fontSize:12}} className="mono"/>
+        placeholder='Paste the JSON pack Claude gave you...' style={{fontSize:12}} className="mono"/>
       <div style={{display:'flex', gap:9, marginTop:10, flexWrap:'wrap', alignItems:'center'}}>
-        <Btn onClick={load} disabled={!raw.trim()}>Load lessons</Btn>
-        {(db.lessons||[]).length>0 && <Btn ghost tone={T.bad} onClick={()=>{
-          if(window.confirm && !window.confirm('Clear all queued lessons and the completion log?')) return;
-          setDb(d=>({...d, lessons:[], lessonLog:{}}));
+        <Btn onClick={load} disabled={!raw.trim()}>Load pack</Btn>
+        {(db.packs||[]).length>0 && <Btn ghost tone={T.bad} onClick={()=>{
+          if(window.confirm && !window.confirm('Delete every study pack and its scores?')) return;
+          setDb(d=>({...d, packs:[], results:{}}));
           setMsg('Cleared.');
-        }}>Clear all lessons</Btn>}
-        <span style={{fontSize:12, color:T.dim}}>{(db.lessons||[]).length} in library</span>
+        }}>Clear all packs</Btn>}
+        <span style={{fontSize:12, color:T.dim}}>{(db.packs||[]).length} in library</span>
       </div>
       {msg && <div style={{fontSize:12.5, color:T.accent2, marginTop:10, lineHeight:1.6}}>{msg}</div>}
     </div>
@@ -2344,9 +2855,9 @@ function SettingsView({db, setDb, fs}){
     <div className="fade-in">
       <H sub="Sync, backup, and how this thing gets your Brightspace data">Settings</H>
 
-      <Row title="Load lessons from Claude"
-        sub="On the Teach me tab, hit “Ask Claude for more lessons” — it copies your uploaded material plus your exam dates. Paste that into Claude, then paste the JSON it returns back in here.">
-        <LessonImport db={db} setDb={setDb}/>
+      <Row title="Load a study pack from Claude"
+        sub="On the Study tab, hit “Ask Claude to build a pack” — it copies your uploaded material, your unit and your exam date. Paste that into Claude, then paste the JSON it returns back here. One pack gives you the guide, flashcards, quiz, exam simulator, matching game and scenarios.">
+        <PackImport db={db} setDb={setDb}/>
       </Row>
 
       <Row title="Cloud sync"
@@ -2500,10 +3011,10 @@ function App(){
   const dueCards = db.cards.filter(cardDue).length;
   const nextExam = upcomingExams(db)[0];
 
-  const lessonsLeft = (db.lessons||[]).filter(l=>!(db.lessonLog||{})[l.id]).length;
+  const packCount = (db.packs||[]).length;
   const NAV = [
     {k:'today', label:'Today', icon:'◉', badge:urgent||null, tone:T.bad},
-    {k:'teach', label:'Teach me', icon:'✦', badge:lessonsLeft||null, tone:T.accent2},
+    {k:'teach', label:'Study', icon:'✦', badge:packCount||null, tone:T.accent2},
     {k:'schedule', label:'Schedule', icon:'▦'},
     {k:'exams', label:'Exams', icon:'⚑', badge:nextExam?Math.max(0,daysUntil(nextExam.date)):null, tone:T.warn},
     {k:'lab', label:'Study Lab', icon:'▤', badge:db.materials.length||null},
