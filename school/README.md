@@ -4,43 +4,48 @@ Single-file app at `school/index.html`. Fall 2026, Missouri State.
 
 ## Opening it
 
-From this folder's parent (`Desktop\Claude`):
+**https://matrixcommandcenter.netlify.app/school/**
 
-```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File serve.ps1 -Port 8777
-```
+That is the whole answer on every device — desktop, laptop, iPhone. Nothing to
+install, nothing to sync first, no server to start. On iPhone: open it, Share →
+Add to Home Screen, and it behaves like an app.
 
-Then go to **http://localhost:8777/school/**
+**It is public.** No passcode, by choice. Anyone with the URL can read your
+coursework, notes, and lessons. Nothing in it is a credential.
 
-Use the localhost URL, not a double-click on the file. Two features need a real
-http origin: OneDrive folder sync, and one-click Brightspace feed refresh.
+The app itself lives at `matrixcommandcenter/school/index.html` and deploys from a
+`git push`. This `school/` folder holds the helper scripts and the feed data only.
 
-## Laptop sync
+### Offline / local fallback
 
-**Server sync, no setup.** Data lives in Supabase — the same project and `matrix`
-table the Command Center (`workspace`) and Matrix Ledger (`ledger`) use, in a row
-called `school`. Open the page on any machine and it pulls the newest copy.
-Measured propagation: **~2 seconds** via realtime, with a 30-second poll and a
-refresh on window focus as backstops.
+`Open School.bat` still starts a local copy at `http://localhost:8777/school/`,
+served from the same file. Useful if Netlify is down. Same data either way — it all
+comes from the database.
+
+## Sync
+
+Data lives in Supabase — the same project and `matrix` table the Command Center
+(`workspace`) and Matrix Ledger (`ledger`) use, in a row called `school`. Open the
+page anywhere and it pulls the newest copy. Measured propagation: **~2 seconds** via
+realtime, with a 30-second poll and a refresh on window focus as backstops.
+
+A device with no local history adopts the cloud copy wholesale on its first pull.
+That is what makes a new laptop or phone work with zero setup.
 
 Sync state is always on screen — green "Synced 11:42 PM" in the sidebar, and a red
 banner across every view if it drops. It will not fail quietly.
 
-Newest write wins on the whole record, so don't edit the same thing on two
-machines at the same minute.
+Newest write wins on the whole record, so don't edit the same thing on two devices
+at the same minute.
 
-Two backup layers behind it:
-
-- **OneDrive** — Settings → Connect OneDrive folder → pick this folder. Writes
-  `school-data.json` alongside the app. Optional; useful if the database is ever
-  unreachable.
-- **Export / Import JSON** — always works, no dependencies.
+Backups: **Export / Import JSON** in Settings, and an optional OneDrive folder copy
+(Settings → OneDrive backup) if you want a file on disk.
 
 Two things stay on the device on purpose:
 
-- Your **Brightspace feed token**. The publishable key is visible in this file, so
-  anything in the cloud row is readable by anyone holding it. Paste the feed URL
-  once per machine.
+- Your **Brightspace feed token**. The publishable key is visible in the page source,
+  so anything in the cloud row is readable by anyone holding it. Paste the feed URL
+  once per device.
 - **Raw extracted text over 60 KB** per deck. The outline, terms, definitions, and
   flashcards all sync; only the full "Raw text" tab is trimmed in transit, and a
   trimmed copy never overwrites full text a device already has.
