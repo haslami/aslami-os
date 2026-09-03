@@ -274,43 +274,54 @@ function blank(){return{
 };}
 const KEY="matrix-ledger-v3";
 let S=blank(), cloud=null, cloudAt=0, localAt=0;
+
+/* EVERY upgrade lives in here, and every path that loads state must run it —
+   boot, AND adopting a copy pulled from the cloud. A device syncing a state
+   saved by an older build used to skip all of this silently, which left
+   soloBonus undefined and quietly paid solo jobs at the plain two-man rate. */
+function migrate_(st){
+  if(!st || !st.settings) return st;
+  try{ if((st.v||0)<4){ st.settings.reserve=st.settings.reserve||{incomeTax:.20,ksSalesTax:.10};
+    st.settings.reserve.taxBase="transfer"; st.v=4; } }catch(e){}
+  /* v5: bonuses / reimbursements / deductions */
+  try{ if((st.v||0)<5){ st.extras=st.extras||{}; st.v=5; } }catch(e){}
+  /* v6: a crew member who leaves is deactivated, never deleted. v5 deleted
+     Hayden, which zeroed his commission on every period he had worked. */
+  try{ if((st.v||0)<6){
+    var T=st.settings.techs||(st.settings.techs=[]);
+    T.forEach(function(t){ if(t.active===undefined) t.active=true; });
+    if(!T.some(function(t){return t.name==="Hayden";})) T.push({name:"Hayden",role:"Technician",active:false});
+    st.v=6; } }catch(e){}
+  /* v7: role labels. Tech -> Team Lead (25%), Junior -> Technician (22.5%). */
+  try{ if((st.v||0)<7){
+    (st.settings.techs||[]).forEach(function(t){
+      if(t.role==="Tech") t.role="Team Lead";
+      else if(t.role==="Junior") t.role="Technician"; });
+    st.v=7; } }catch(e){}
+  /* v8: solo is a BONUS on top of the person's own rate, not a flat rate. The
+     old flat 0.40 was right for a Team Lead (25+15) but overpaid every
+     Technician working alone — 40% instead of 37.5%. */
+  try{ if((st.v||0)<8){ var R8=st.settings.rates||(st.settings.rates={});
+    if(R8.soloBonus===undefined) R8.soloBonus=0.15;
+    delete R8.solo;
+    st.v=8; } }catch(e){}
+  /* v9: online booking deposits taken on Stripe. */
+  try{ if((st.v||0)<9){
+    if(st.settings.depositAmount===undefined) st.settings.depositAmount=50;
+    if(st.settings.methods && st.settings.methods.indexOf("Stripe (online)")<0)
+      st.settings.methods.splice(Math.max(0,st.settings.methods.length-1),0,"Stripe (online)");
+    (st.jobs||[]).forEach(function(j){ if(j.deposit===undefined) j.deposit=0; });
+    st.v=9; } }catch(e){}
+  /* belt and braces: a rate or setting must never be undefined, whatever the
+     version says, because an undefined rate pays somebody the wrong amount. */
+  try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
+  try{ if(st.settings.depositAmount===undefined) st.settings.depositAmount=50; }catch(e){}
+  if(!st.extras) st.extras={};
+  return st;
+}
+
 try{const raw=localStorage.getItem(KEY); if(raw){const o=JSON.parse(raw); if(o&&o.settings) S=o;}}catch(e){}
-/* v4: income-tax reserve is a % of the bank transfer only, not of cash paid to owners */
-try{ if((S.v||0)<4){ S.settings.reserve=S.settings.reserve||{incomeTax:.20,ksSalesTax:.10};
-  S.settings.reserve.taxBase="transfer"; S.v=4; } }catch(e){}
-/* v5: bonuses / reimbursements / deductions */
-try{ if((S.v||0)<5){ S.extras=S.extras||{}; S.v=5; } }catch(e){}
-/* v6: a crew member who leaves is deactivated, never deleted. v5 deleted Hayden,
-   which zeroed his commission on every period he had already worked. */
-try{ if((S.v||0)<6){
-  var T=S.settings.techs||(S.settings.techs=[]);
-  T.forEach(function(t){ if(t.active===undefined) t.active=true; });
-  if(!T.some(function(t){return t.name==="Hayden";})) T.push({name:"Hayden",role:"Technician",active:false});
-  S.v=6; } }catch(e){}
-/* v7: role labels renamed. Tech -> Team Lead (25%), Junior -> Technician (22.5%).
-   Rates and rate keys are untouched, so nobody's pay changes by a cent. */
-try{ if((S.v||0)<7){
-  (S.settings.techs||[]).forEach(function(t){
-    if(t.role==="Tech") t.role="Team Lead";
-    else if(t.role==="Junior") t.role="Technician"; });
-  S.v=7; } }catch(e){}
-/* v8: solo is a BONUS on top of the person's own rate, not a flat rate for
-   everyone. The old flat 0.40 happened to be right for a Team Lead (25+15) but
-   overpaid every Technician who worked alone — 40% instead of 37.5%. */
-try{ if((S.v||0)<8){ var R8=S.settings.rates||(S.settings.rates={});
-  if(R8.soloBonus===undefined) R8.soloBonus=0.15;
-  delete R8.solo;
-  S.v=8; } }catch(e){}
-try{ if(S.settings.rates.soloBonus===undefined) S.settings.rates.soloBonus=0.15; }catch(e){}
-/* v9: online booking deposits taken on Stripe. */
-try{ if((S.v||0)<9){
-  if(S.settings.depositAmount===undefined) S.settings.depositAmount=50;
-  if(S.settings.methods && S.settings.methods.indexOf("Stripe (online)")<0)
-    S.settings.methods.splice(Math.max(0,S.settings.methods.length-1),0,"Stripe (online)");
-  (S.jobs||[]).forEach(function(j){ if(j.deposit===undefined) j.deposit=0; });
-  S.v=9; } }catch(e){}
-try{ if(S.settings.depositAmount===undefined) S.settings.depositAmount=50; }catch(e){}
-if(!S.extras) S.extras={};
+migrate_(S);
 /* migrate a v2 save if one exists and v3 is empty */
 try{ if(!S.jobs.length){ const old=localStorage.getItem("matrix-ledger-v2");
   if(old){ const o=JSON.parse(old); if(o&&o.jobs&&o.jobs.length){ S.jobs=o.jobs; if(o.settings&&o.settings.techs) S.settings.techs=o.settings.techs; } } } }catch(e){}
@@ -462,7 +473,11 @@ async function supaPush(snapshot){
 }
 
 function adoptCloud(st, at){
-  S=st; if(!S.extras) S.extras={};
+  /* Run the upgrades on anything arriving from the cloud. Another device may
+     have saved it on an older build, and adopting it raw would silently roll
+     this device back — that is how solo jobs ended up paying the two-man rate
+     on a freshly opened phone. */
+  S=migrate_(st); if(!S.extras) S.extras={};
   cloudDirty=false; cloudAt=at||Date.now();
   try{ localStorage.setItem(KEY,JSON.stringify(S)); localAt=Date.now(); }catch(e){}
   fillPeriods(); renderAll();
@@ -538,7 +553,7 @@ function arm(el, done){
           cloudAt=o.savedAt||0;
           if(!S.savedAt||o.savedAt>S.savedAt){
             /* The cloud copy is newer — another device did the work. Take it. */
-            S=o; if(!S.extras)S.extras={}; cloudDirty=false; fillPeriods(); renderAll();
+            S=migrate_(o); if(!S.extras)S.extras={}; cloudDirty=false; fillPeriods(); renderAll();
             toast("Loaded the newer copy from the cloud.");
           } else if(S.savedAt>(o.savedAt||0)+1000){
             /* This device is ahead. Push it up rather than sitting on the only copy. */
@@ -1580,7 +1595,7 @@ function renderSetup(){
     const t=$("#restoreText").value.trim();
     if(!t){toast("Paste the backup file's contents in the box first.");return;}
     try{ const o=JSON.parse(t); if(!o.settings||!o.jobs) throw 0;
-      S=o; if(!S.extras)S.extras={}; save(); fillPeriods(); renderAll(); toast("Restored."); }
+      S=migrate_(o); if(!S.extras)S.extras={}; save(); fillPeriods(); renderAll(); toast("Restored."); }
     catch(e){ toast("That didn't look like a Matrix Ledger backup."); }});
   arm($("#loadSample"),()=>{
     loadSample();save();CUR="PP16";fillPeriods();renderAll();toast("Sample loaded — erase it when you're done.");});
