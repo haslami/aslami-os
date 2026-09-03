@@ -250,9 +250,9 @@ const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]
 
 /* ---------------- state ---------------- */
 function blank(){return{
-  v:7, savedAt:0,
+  v:9, savedAt:0,
   settings:{
-    rates:{owner:.35,team:.25,junior:.225,solo:.40,tax:.0765,minWage:13.75},
+    rates:{owner:.35,team:.25,junior:.225,soloBonus:.15,tax:.0765,minWage:13.75},
     dist:{Habib:.175,Ryan:.175,"Savings / Tax":.25,Checking:.40},
     reserve:{incomeTax:.20, ksSalesTax:.10, taxBase:"transfer"},  // transfer | draws
     /* A name stays on this list forever once somebody has worked a job under it.
@@ -264,7 +264,8 @@ function blank(){return{
            {name:"Christian",role:"Technician",active:true},
            {name:"Hayden",role:"Technician",active:false}],
     services:["Basic","Standard","Premium","Deluxe","Exterior Only","Ceramic Coating","Add-on","Cancellation Fee","Other"],
-    methods:["Card (MO)","Card (KS)","Cash","Venmo","Check","Zelle","Other"],
+    methods:["Card (MO)","Card (KS)","Cash","Venmo","Check","Zelle","Stripe (online)","Other"],
+    depositAmount:50,   /* standard online booking deposit, taken on Stripe */
     cashMethods:["Cash"],
     ksMethods:["Card (KS)"],
     spendCats:["Gas","Supplies","Van","Merch","Food","Ads","Accountant","Insurance","GHL","Other"]
@@ -293,6 +294,22 @@ try{ if((S.v||0)<7){
     if(t.role==="Tech") t.role="Team Lead";
     else if(t.role==="Junior") t.role="Technician"; });
   S.v=7; } }catch(e){}
+/* v8: solo is a BONUS on top of the person's own rate, not a flat rate for
+   everyone. The old flat 0.40 happened to be right for a Team Lead (25+15) but
+   overpaid every Technician who worked alone — 40% instead of 37.5%. */
+try{ if((S.v||0)<8){ var R8=S.settings.rates||(S.settings.rates={});
+  if(R8.soloBonus===undefined) R8.soloBonus=0.15;
+  delete R8.solo;
+  S.v=8; } }catch(e){}
+try{ if(S.settings.rates.soloBonus===undefined) S.settings.rates.soloBonus=0.15; }catch(e){}
+/* v9: online booking deposits taken on Stripe. */
+try{ if((S.v||0)<9){
+  if(S.settings.depositAmount===undefined) S.settings.depositAmount=50;
+  if(S.settings.methods && S.settings.methods.indexOf("Stripe (online)")<0)
+    S.settings.methods.splice(Math.max(0,S.settings.methods.length-1),0,"Stripe (online)");
+  (S.jobs||[]).forEach(function(j){ if(j.deposit===undefined) j.deposit=0; });
+  S.v=9; } }catch(e){}
+try{ if(S.settings.depositAmount===undefined) S.settings.depositAmount=50; }catch(e){}
 if(!S.extras) S.extras={};
 /* migrate a v2 save if one exists and v3 is empty */
 try{ if(!S.jobs.length){ const old=localStorage.getItem("matrix-ledger-v2");
@@ -565,6 +582,14 @@ async function cloudSave(auto){
 const ROLES=["Owner","Team Lead","Technician"];
 const ROLE_RATE={Owner:"owner","Team Lead":"team",Technician:"junior",
                  Tech:"team",Junior:"junior"};          // legacy names, keep forever
+/* Solo pays the person's OWN rate plus a bonus — it is not a flat rate for
+   everybody. A Team Lead on 25% earns 40% solo; a Technician on 22.5% earns
+   37.5%. Treating solo as one fixed number overpaid every Technician who
+   worked alone. */
+/* NOT r2() — that rounds to two decimals, which is right for dollars and wrong
+   for a rate: 22.5% + 15% would land on 38% instead of 37.5%. Six decimals keeps
+   the half-percent and still kills floating-point dust. */
+const rateFor=(n,solo)=>Math.round((baseRate(n)+(solo?(S.settings.rates.soloBonus||0):0))*1e6)/1e6;
 const techRole=n=>{const t=S.settings.techs.find(x=>x.name===n);return t?t.role:null;};
 const isOwner=n=>techRole(n)==="Owner";
 const baseRate=n=>{const r=S.settings.rates,ro=techRole(n);
@@ -573,7 +598,7 @@ function lines(j){
   const techs=(j.techs||[]).filter(Boolean), crew=techs.length; if(!crew) return [];
   const solo=crew===1, done=j.status==="Completed";
   return techs.map((name,i)=>{
-    const rate=solo?S.settings.rates.solo:baseRate(name);
+    const rate=rateFor(name,solo);
     return {job:j,name,crew,solo,rate,comm:done?r2(num(j.price)*rate):0,
       tip:r2(num(j.tip)/crew), tipCash:!!j.tipCash,
       adj:(j.adj&&j.adj[i])||0, hours:num(j.hours)};
@@ -648,14 +673,21 @@ function totals(p){
   const reimb=r2(X.empReimb+X.ownReimb);
   const opex=spendTotal(p);
   const net=r2(revenue-ownerCost-empCost-opex-reimb);
+  /* Online bookings pay a deposit through Stripe before the job. That money
+     settles like a Missouri card, not as cash and not as whatever they hand over
+     on the driveway — so the payment method describes only the BALANCE. */
+  const deposits=r2(done.reduce((a,j)=>a+num(j.deposit),0));
   /* Cash in hand, available to pay owners. A tip the crew split themselves never
-     reached the till, so it is not yours to hand out. */
+     reached the till, and neither did a deposit already paid online. */
   const cashIn=r2(done.filter(j=>S.settings.cashMethods.indexOf(j.payment)>-1)
-    .reduce((a,j)=>a+num(j.price)+(j.tipCash?0:num(j.tip)),0));
+    .reduce((a,j)=>a+Math.max(0,num(j.price)-num(j.deposit))+(j.tipCash?0:num(j.tip)),0));
+  /* Kansas sales tax follows where the WORK happened, not how it was paid. The
+     deposit stays in the Kansas base even though Stripe settles like a Missouri
+     card — dropping it here would quietly under-reserve the tax. */
   const ksSales=r2(done.filter(j=>S.settings.ksMethods.indexOf(j.payment)>-1).reduce((a,j)=>a+num(j.price),0));
   const labor=r2(ownerCost+empCost);
   return {revenue,tips,ownerComm:r2(ownerComm),empComm:r2(empComm),empTips,empAdj,ownerTips,ownerAdj,
-    empWages,empTax,empCost,ownerCost,reimb,x:X,
+    empWages,empTax,empCost,ownerCost,reimb,x:X,deposits,
     tipsCash,empTipsCash,empTipsPay,
     tipOut:r2(tipOut),adj:r2(adj),hours:r2(hours),opex,net,cashIn,ksSales,labor,
     jobs:done.length, solo:done.filter(j=>(j.techs||[]).filter(Boolean).length===1).length,
@@ -749,6 +781,7 @@ function renderPeriod(){
     <div class="kpis">
       ${kpi("Job revenue",money0(t.revenue),"tips excluded")}
       ${kpi("Cash collected",money0(t.cashIn),"available for owner pay","cash")}
+      ${t.deposits?kpi("Online deposits",money0(t.deposits),"taken on Stripe up front","cash"):""}
       ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
       ${kpi("Employee wages",money0(t.empWages),"through QuickBooks")}
       ${kpi("To savings",money0(P.toSavings),"tax reserve","pos")}
@@ -805,7 +838,8 @@ function renderMoves(){
       "The rest of their "+money(s.earned)+" work pay, after the cash above.",s.transfer)).join("");
   $("#v-moves").innerHTML=`
     <div class="kpis">
-      ${kpi("Cash collected",money0(t.cashIn),"this period","cash")}
+      ${kpi("Cash collected",money0(t.cashIn),"this period, deposits excluded","cash")}
+      ${t.deposits?kpi("Online deposits",money0(t.deposits),"already in the bank via Stripe","cash"):""}
       ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
       ${kpi("Covered by cash",money0(P.cashToOwners),P.ownerPay?pct(P.cashToOwners/P.ownerPay)+" of owner pay":"","cash")}
       ${kpi("Bank transfer needed",money0(P.ownerTransfer),P.ownerTransfer?"after cash":"cash covered it all",P.ownerTransfer?"warn":"pos")}
@@ -973,7 +1007,10 @@ function renderJobs(){
         <div class="f"><label>Cash tip, split on the job?</label>
           <label style="display:flex;gap:.4rem;align-items:center;font-size:.85rem;padding:.3rem 0">
             <input type="checkbox" id="jtc"> already handed over</label></div>
-        <div class="f"><label>Payment</label><select id="jm">${opts(s.methods,"Card (MO)")}</select></div>
+        <div class="f"><label>Payment <span class="hint">of the balance</span></label><select id="jm">${opts(s.methods,"Card (MO)")}</select></div>
+        <div class="f"><label>Online deposit</label>
+          <label style="display:flex;gap:.4rem;align-items:center;font-size:.85rem;padding:.3rem 0">
+            <input type="checkbox" id="jdep"> ${money(num(s.depositAmount)||50)} paid on Stripe</label></div>
         <div class="f"><label>Tech 1</label><select id="j1"><option value=""></option>${opts(tn)}</select></div>
         <div class="f"><label>Tech 2</label><select id="j2"><option value=""></option>${opts(tn)}</select></div>
         <div class="f"><label>Tech 3</label><select id="j3"><option value=""></option>${opts(tn)}</select></div>
@@ -999,6 +1036,7 @@ function renderJobs(){
     const d=$("#jd").value; if(!d) return toast("A job needs a date.");
     S.jobs.push({id:uid(),date:d,customer:$("#jc").value||"—",service:$("#jsv").value,price:num($("#jp").value),
       tip:num($("#jt").value),tipCash:!!($("#jtc")&&$("#jtc").checked),
+      deposit:($("#jdep")&&$("#jdep").checked)?(num(S.settings.depositAmount)||50):0,
       payment:$("#jm").value,status:"Completed",
       techs:[$("#j1").value,$("#j2").value,$("#j3").value].filter(Boolean),adj:[0,0,0],hours:num($("#jh").value),notes:""});
     const pp=periodOf(d); if(pp) CUR=pp.id; save(); fillPeriods(); renderAll(); toast("Job added.");});
@@ -1011,8 +1049,8 @@ function prevCalc(){
   if(!el) return;
   if(!techs.length){el.textContent="No tech yet — nobody gets paid for this job.";return;}
   const solo=techs.length===1;
-  const parts=techs.map(n=>n+" "+pct(solo?S.settings.rates.solo:baseRate(n))+" = "+money(r2(price*(solo?S.settings.rates.solo:baseRate(n)))));
-  const tot=techs.reduce((a,n)=>a+(solo?S.settings.rates.solo:baseRate(n)),0);
+  const parts=techs.map(n=>n+" "+pct(rateFor(n,solo))+" = "+money(r2(price*rateFor(n,solo))));
+  const tot=techs.reduce((a,n)=>a+rateFor(n,solo),0);
   el.innerHTML=(solo?'<span class="pill solo">solo</span> ':"")+esc(parts.join("  ·  "))+"  ·  labor "+pct(tot);
 }
 function splitRows(txt){const rows=[];let row=[],cell="",q=false;
@@ -1043,6 +1081,7 @@ function parseImport(txt){
     iUps=find("upsell total","upsell $"), iTicket=find("ticket total"), iTip=find("tip"),
     iPay=find("payment type","payment"), iT1=find("tech 1"), iT2=find("tech 2"), iT3=find("tech 3"),
     iTipCash=find("cash tip split?","cash tip split","tip split in cash","cash tip"),
+    iDep=find("online deposit","deposit","stripe deposit","deposit paid"),
     iHrs=find("hours","hours duration"), iNotes=find("notes");
   const out=[],warn=[];
   if(iRev<0&&iPkg<0&&iTicket>-1) warn.push("No JOB REVENUE or Package $ column — using Ticket Total minus Tip.");
@@ -1059,6 +1098,13 @@ function parseImport(txt){
       price:r2(price),tip:r2(tip),
       /* Yes = the crew split that tip in cash on the job. Already paid, keep it out of the pay run. */
       tipCash:iTipCash>-1 && /^(y|true|1)/i.test(String(row[iTipCash]||"").trim()),
+      /* The column may be a Yes/No or the amount itself. "Yes" means the standard
+         online deposit; a number means that exact amount. */
+      deposit:(function(){ if(iDep<0) return 0;
+        const raw=String(row[iDep]||"").trim(); if(!raw) return 0;
+        if(/^(y|true)/i.test(raw)) return num(S.settings.depositAmount)||50;
+        if(/^n(o)?$/i.test(raw)) return 0;
+        return r2(num(raw)); })(),
       payment:(iPay>-1?String(row[iPay]).trim():"")||"Other",status:"Completed",
       techs:[iT1>-1?row[iT1]:"",iT2>-1?row[iT2]:"",iT3>-1?row[iT3]:""].map(x=>String(x||"").trim()).filter(Boolean),
       adj:[0,0,0],hours:iHrs>-1?num(row[iHrs]):0,notes:(iNotes>-1?row[iNotes]:"")||""});
@@ -1405,7 +1451,7 @@ function renderSetup(){
   $("#viewSub").textContent="rates, reserves, crew, backups";
   const r=S.settings.rates, rs=S.settings.reserve;
   const F=[["owner","Owner rate","%"],["team","Team Lead rate (2+)","%"],["junior","Technician rate","%"],
-           ["solo","Solo rate","%"],["tax","Employer payroll tax","%"],["minWage","Minimum wage","$"]];
+           ["soloBonus","Solo bonus (on top)","%"],["tax","Employer payroll tax","%"],["minWage","Minimum wage","$"]];
   $("#v-setup").innerHTML=`
     <div class="card"><h2>Put this on your desktop and your phone</h2>
       <p class="sub">One copy, same data everywhere — as long as you always open it from this same link.</p>
@@ -1442,11 +1488,14 @@ function renderSetup(){
         <div class="grid">${F.map(([k,l,u])=>`<div class="f"><label>${l}</label>
           <input type="number" step="${u==="%"?"0.5":"0.25"}" value="${u==="%"?(r[k]*100).toFixed(2):r[k]}" data-r="${k}" data-u="${u}"></div>`).join("")}</div>
         <p class="hint" style="margin-top:.7rem">A crew of two costs you both their rates — two Team Leads
-          at ${pct(r.team)} each is ${pct(r.team*2)} of the job. One person solo is ${pct(r.solo)}, whoever
-          they are. <b>Solo is the cheaper way to run a job</b>, and the app works that out from the crew
-          size on its own — there is nothing to tick.</p>
-        <p class="hint">Rates are per role: <b>Owner</b> ${pct(r.owner)} · <b>Team Lead</b> ${pct(r.team)} ·
-          <b>Technician</b> ${pct(r.junior)}.</p></div>
+          at ${pct(r.team)} each is ${pct(r.team*2)} of the job. Working alone earns a person
+          <b>their own rate plus ${pct(r.soloBonus)}</b> — so it is not the same number for everybody.
+          <b>Solo is still the cheaper way to run a job</b>, and the app works it out from the crew size
+          on its own — there is nothing to tick.</p>
+        <p class="hint">Two-man rate / solo rate, by role:
+          <b>Owner</b> ${pct(r.owner)} → ${pct(r.owner+r.soloBonus)} ·
+          <b>Team Lead</b> ${pct(r.team)} → ${pct(r.team+r.soloBonus)} ·
+          <b>Technician</b> ${pct(r.junior)} → ${pct(r.junior+r.soloBonus)}.</p></div>
       <div class="card"><h2>Tax reserves</h2>
         <div class="grid">
           <div class="f"><label>Income tax set-aside</label><input type="number" step="1" value="${(rs.incomeTax*100).toFixed(0)}" data-rs="incomeTax"></div>
