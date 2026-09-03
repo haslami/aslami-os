@@ -250,7 +250,7 @@ const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]
 
 /* ---------------- state ---------------- */
 function blank(){return{
-  v:9, savedAt:0,
+  v:10, savedAt:0,
   settings:{
     rates:{owner:.35,team:.25,junior:.225,soloBonus:.15,tax:.0765,minWage:13.75},
     dist:{Habib:.175,Ryan:.175,"Savings / Tax":.25,Checking:.40},
@@ -260,7 +260,7 @@ function blank(){return{
        recalculates every past period they worked at 0%. Use active:false instead —
        it hides them from the job pickers but keeps their rate intact. */
     techs:[{name:"Habib",role:"Owner",active:true},{name:"Ryan",role:"Owner",active:true},
-           {name:"Mikey",role:"Team Lead",active:true},{name:"Gannon",role:"Team Lead",active:true},
+           {name:"Mikey",role:"Team Lead",active:true},{name:"Gannon",role:"Team Lead",active:false},
            {name:"Christian",role:"Technician",active:true},
            {name:"Hayden",role:"Technician",active:false}],
     services:["Basic","Standard","Premium","Deluxe","Exterior Only","Ceramic Coating","Add-on","Cancellation Fee","Other"],
@@ -312,6 +312,13 @@ function migrate_(st){
       st.settings.methods.splice(Math.max(0,st.settings.methods.length-1),0,"Stripe (online)");
     (st.jobs||[]).forEach(function(j){ if(j.deposit===undefined) j.deposit=0; });
     st.v=9; } }catch(e){}
+  /* v10: Gannon and Hayden have both left. DEACTIVATED, not deleted — the crew
+     list is also the commission-rate lookup, so removing a name pays every past
+     period they worked at 0%. */
+  try{ if((st.v||0)<10){
+    (st.settings.techs||[]).forEach(function(t){
+      if(t.name==="Gannon"||t.name==="Hayden") t.active=false; });
+    st.v=10; } }catch(e){}
   /* belt and braces: a rate or setting must never be undefined, whatever the
      version says, because an undefined rate pays somebody the wrong amount. */
   try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
@@ -813,6 +820,33 @@ function renderPeriod(){
         ${P.distr.map(d=>`<div class="qbrow"><span>${esc(d.k)} <span class="hint">${pct(d.pctv)}</span></span><span>${money(d.amt)}</span></div>`).join("")}
         <div class="qbrow tot"><span>Net income</span><span>${money(t.net)}</span></div>
         <p class="hint" style="margin-top:.6rem">Distributions come out of profit — they are not a cost, and they sit on top of the owner work pay above.</p></div>
+    </div>
+
+    <div class="card"><h2>Tips this period</h2>
+      <p class="sub">${money(t.tips)} came in as tips${t.revenue?" — "+pct(t.tips/t.revenue)+" of job revenue":""}.
+        None of it is yours; all of it reaches the crew. This is here so you can see the size of it and
+        check the two routes add up.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Person</th><th class="n">Taken in cash on the job</th>
+          <th class="n">Owed through payroll</th><th class="n">Total earned</th></tr></thead>
+        <tbody>${P.pr.filter(r=>r.tip>0).map(r=>`<tr>
+          <td><b>${esc(r.name)}</b>${r.owner?' <span class="pill mut">owner</span>':""}</td>
+          <td class="n" style="color:var(--cash)">${r.tipCash?money(r.tipCash):"—"}</td>
+          <td class="n">${r.tipPay?money(r.tipPay):"—"}</td>
+          <td class="n"><b>${money(r.tip)}</b></td></tr>`).join("")
+          || `<tr><td colspan="4" class="hint">No tips logged this period.</td></tr>`}</tbody>
+        <tfoot><tr><td>Total</td>
+          <td class="n">${money(t.tipsCash)}</td>
+          <td class="n">${money(r2(t.tips-t.tipsCash))}</td>
+          <td class="n"><b>${money(t.tips)}</b></td></tr></tfoot>
+      </table></div>
+      <p class="hint" style="margin-top:.6rem">
+        <b>Cash on the job</b> never reached your account — the crew split it in the driveway, so it is
+        already paid and stays out of the QuickBooks run.
+        <b>Through payroll</b> is the part that landed in your bank alongside the card payment. You are
+        holding it for them and it goes out on the pay run. Employer payroll tax is charged on that part,
+        which is the one bit of a tip that genuinely costs you money — about
+        ${money(r2((t.tips-t.tipsCash)*S.settings.rates.tax))} this period.</p>
     </div>`;
   $("#goMoves").addEventListener("click",()=>$$(".nav").find(b=>b.dataset.v==="moves").click());
   $("#markSub").addEventListener("click",()=>{S.submitted[CUR]=!S.submitted[CUR];save();renderAll();});
