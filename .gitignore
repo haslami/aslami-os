@@ -1,0 +1,3 @@
+# Personal school data: the Brightspace feed export and its parsed events.
+# The app itself lives in matrixcommandcenter/school/ and is deployed.
+school/data/

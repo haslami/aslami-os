@@ -1,0 +1,2630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ultramind — School Command Center</title>
+<meta name="theme-color" content="#08090d" />
+<script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.4/babel.min.js"></script>
+<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    background:#08090d;color:#e9ecf2;overflow:hidden;
+    -webkit-font-smoothing:antialiased;letter-spacing:.2px;
+  }
+  #root{height:100vh;display:flex;overflow:hidden}
+  ::-webkit-scrollbar{width:7px;height:7px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(190,60,90,0.30);border-radius:4px}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(190,60,90,0.55)}
+
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes fadeInFast{from{opacity:0}to{opacity:1}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes scaleIn{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+  @keyframes glowRed{0%,100%{box-shadow:0 0 0 1px rgba(255,86,110,.35),0 0 10px rgba(255,86,110,.16)}50%{box-shadow:0 0 0 1px rgba(255,86,110,.62),0 0 22px rgba(255,86,110,.4)}}
+  @keyframes growBar{from{width:0}}
+  .fade-in{animation:fadeIn .3s ease forwards}
+  .fade-in-fast{animation:fadeInFast .2s ease forwards}
+  .scale-in{animation:scaleIn .18s ease forwards}
+  .spin{animation:spin .8s linear infinite}
+  .glow-red{animation:glowRed 1.9s ease-in-out infinite}
+  .pulse{animation:pulse 2s ease infinite}
+
+  input,textarea,select,button{font-family:inherit;font-size:inherit;color:inherit}
+  input,textarea,select{
+    background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);
+    border-radius:9px;padding:9px 11px;outline:none;width:100%;
+  }
+  input:focus,textarea:focus,select:focus{border-color:rgba(232,90,120,.55);background:rgba(255,255,255,.06)}
+  select option{background:#12141a}
+  button{background:none;border:none;cursor:pointer}
+  textarea{resize:vertical;line-height:1.55}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .nodrag{-webkit-user-select:none;user-select:none}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>window.SEED_EVENTS=[];window.SEED_BUILT='cloud';</script>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useMemo,useRef,useCallback} = React;
+
+/* ============================================================
+   THEME
+   ============================================================ */
+const T = {
+  bg:'#08090d', panel:'#0e1016', panel2:'#12151c', line:'rgba(255,255,255,.08)',
+  text:'#e9ecf2', dim:'#8d95a6', dimmer:'#5c6373',
+  accent:'#e85a78', accent2:'#f0a63c', good:'#2fd07a', warn:'#f0a63c', bad:'#ff566e', info:'#5aa8ff',
+};
+const COURSE_COLORS = ['#e85a78','#5aa8ff','#2fd07a','#f0a63c','#b47cf0','#3ecfd4'];
+
+/* ============================================================
+   UTIL
+   ============================================================ */
+const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
+const clamp = (n,a,b) => Math.max(a, Math.min(b, n));
+const DAY = 86400000;
+
+/* ICS packs timestamps as 20260922T045959Z. Parse to a real Date. */
+function icsToDate(s){
+  if(!s) return null;
+  const m = String(s).match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/);
+  if(!m) return null;
+  const [,y,mo,d,h,mi,se,z] = m;
+  if(!h) return new Date(+y, +mo-1, +d, 23, 59, 0);
+  return z ? new Date(Date.UTC(+y,+mo-1,+d,+h,+mi,+se))
+           : new Date(+y,+mo-1,+d,+h,+mi,+se);
+}
+const startOfDay = d => { const x=new Date(d); x.setHours(0,0,0,0); return x; };
+function daysUntil(d){
+  if(!d) return 9999;
+  return Math.round((startOfDay(d) - startOfDay(new Date())) / DAY);
+}
+function fmtDate(d,opts){
+  if(!d) return '—';
+  return d.toLocaleDateString('en-US', opts || {weekday:'short',month:'short',day:'numeric'});
+}
+function fmtTime(d){
+  if(!d) return '';
+  return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
+/* Brightspace stamps "due 11:59pm" as 04:59Z next day. Show the day students mean. */
+function dueLabel(d){
+  const n = daysUntil(d);
+  if(n < 0)  return {txt:`${Math.abs(n)}d late`, tone:'bad'};
+  if(n === 0) return {txt:'TODAY', tone:'bad'};
+  if(n === 1) return {txt:'Tomorrow', tone:'warn'};
+  if(n <= 7)  return {txt:`${n} days`, tone:'warn'};
+  return {txt:`${n} days`, tone:'dim'};
+}
+
+/* ============================================================
+   COURSE MODEL — derived from the live Brightspace enrolment
+   ============================================================ */
+const SEED_COURSES = [
+  { id:'law532', code:'LAW 532',  ou:'127245', match:['LAW532-002-FA26'],
+    name:'Agency, Employment & Business Organizations', section:'002', mode:'in-person' },
+  { id:'mkt364', code:'MKT 364',  ou:'125236', match:['MKT364-005-FA26'],
+    name:'Operations Management', section:'005', mode:'in-person' },
+  { id:'fin380', code:'FIN 380',  ou:'127505', match:['FIN380/600-004-FA26'],
+    name:'Financial Management', section:'004', mode:'in-person' },
+  { id:'law332', code:'LAW 332',  ou:'127841', match:['LAW 332-898'],
+    name:'Debtor and Creditor Rights and Remedies', section:'898', mode:'online-async' },
+  { id:'fin266', code:'FIN 266',  ou:'124009', match:['FIN266-899-FA26'],
+    name:'Personal Finance', section:'899', mode:'online' },
+  { id:'fin384', code:'FIN 384',  ou:'126934', match:['FIN384'],
+    name:'Financial Markets & Investments', section:'899', mode:'online' },
+].map((c,i)=>({ ...c, color: COURSE_COLORS[i % COURSE_COLORS.length] }));
+
+function courseFor(locationStr, courses){
+  if(!locationStr) return null;
+  for(const c of courses){
+    for(const m of (c.match||[])){
+      if(locationStr.indexOf(m) === 0 || locationStr.indexOf(m) > -1) return c;
+    }
+  }
+  return null;
+}
+
+/* ============================================================
+   ICS PARSER — same shape Brightspace publishes
+   ============================================================ */
+function parseICS(text){
+  const unfolded = text.replace(/\r?\n[ \t]/g,'');
+  const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) || [];
+  const unesc = s => String(s).replace(/\\n/g,'\n').replace(/\\,/g,',').replace(/\\;/g,';').replace(/\\\\/g,'\\');
+  const get = (b,key) => { const m = b.match(new RegExp('^'+key+'[^:\\n]*:(.*)$','m')); return m ? m[1].trim() : ''; };
+  return blocks.map(b=>{
+    const summary = unesc(get(b,'SUMMARY'));
+    const desc    = unesc(get(b,'DESCRIPTION'));
+    const linkM   = desc.match(/(https:\/\/brightspace\.missouristate\.edu\/d2l\/le\/content\/\d+\/viewContent\/\d+\/View)/);
+    const ouM     = desc.match(/\/d2l\/le\/(?:content|calendar)\/(\d+)\//);
+    let kind = 'other';
+    if(/ - Due$/.test(summary)) kind='due';
+    else if(/ - Available$/.test(summary)) kind='open';
+    else if(/ - Availability Ends$/.test(summary)) kind='ends';
+    return {
+      uid: get(b,'UID'),
+      at: get(b,'DTSTART'),
+      course: unesc(get(b,'LOCATION')),
+      title: cleanTitle(summary.replace(/ - (Due|Available|Availability Ends)$/,'')),
+      kind, ou: ouM ? ouM[1] : '', link: linkM ? linkM[1] : '',
+    };
+  }).filter(e => e.at && e.course);
+}
+
+/* Brightspace titles carry proctoring boilerplate that buries the actual
+   subject. Strip it once so every list reads like a human wrote it. */
+const cleanTitle = t => String(t||'')
+  .replace(/\s*[-–]\s*Requires Respondus LockDown Browser(\s*\+\s*Webcam)?/ig,'')
+  .replace(/^Proctoring Enabled:\s*/i,'')
+  .replace(/\s*\(Practice Only;?\s*Not Graded\)/i,' (ungraded)')
+  .replace(/\s{2,}/g,' ').trim();
+const normalizeEvents = evs => (evs||[]).map(e=>({...e, title: cleanTitle(e.title)}));
+
+/* An item counts as gradeable work when it is a real deadline, not a
+   "module unlocked" notice. Those inflate every list and hide the real work. */
+const isWork = e => e.kind === 'due';
+const EXAM_RE  = /\b(exam|midterm|final|unit\s+[ivx\d]+|test)\b/i;
+const QUIZ_RE  = /\b(quiz|smartbook|concept check|exit ticket)\b/i;
+const isExam = e => EXAM_RE.test(e.title) && !/practice|mock|pre-exam|bonus|review|key to/i.test(e.title);
+function workType(e){
+  if(isExam(e)) return 'exam';
+  if(QUIZ_RE.test(e.title)) return 'quiz';
+  if(/\b(assignment|case analysis|application-based|problems|project|paper|role play)\b/i.test(e.title)) return 'assignment';
+  if(/\b(discussion|forum|post)\b/i.test(e.title)) return 'discussion';
+  if(/\b(video|orientation|read)\b/i.test(e.title)) return 'reading';
+  return 'task';
+}
+const TYPE_META = {
+  exam:      {label:'Exam',       icon:'⚑', tone:'#ff566e', weight:100},
+  quiz:      {label:'Quiz',       icon:'✎', tone:'#f0a63c', weight:20},
+  assignment:{label:'Assignment', icon:'◆', tone:'#5aa8ff', weight:35},
+  discussion:{label:'Discussion', icon:'◇', tone:'#b47cf0', weight:10},
+  reading:   {label:'Reading',    icon:'▤', tone:'#3ecfd4', weight:8},
+  task:      {label:'Task',       icon:'•', tone:'#8d95a6', weight:10},
+};
+
+/* ============================================================
+   STORAGE
+   localStorage is the always-works layer. A OneDrive folder handle
+   (File System Access API) is the cross-device layer: the same
+   school-data.json rides OneDrive to the laptop.
+   ============================================================ */
+const LS_KEY = 'ultramind.school.v1';
+const FS_FILE = 'school-data.json';
+
+function blankDB(){
+  return {
+    v:1, updatedAt:new Date().toISOString(),
+    courses: SEED_COURSES.map(c=>({...c})),
+    events: normalizeEvents(window.SEED_EVENTS),
+    done: {},          /* uid -> ISO timestamp */
+    materials: [],     /* uploaded decks / notes / study guides, with extracted text */
+    cards: [],         /* flashcards w/ spaced repetition state */
+    lessons: [],       /* daily lessons Claude wrote, queued in order */
+    lessonLog: {},     /* lessonId -> ISO completed, drives the streak */
+    log: [],           /* study sessions */
+    schedule: {
+      /* Habib's real constraints: business runs KC, Saturdays are owner jobs. */
+      blocks: [],
+      busy: [
+        {id:'sat', label:'Matrix — high-ticket / member jobs', days:[6], start:'08:00', end:'18:00', kind:'work'},
+        {id:'gym', label:'Gym (6-day split)', days:[1,2,3,4,5,0], start:'17:00', end:'18:30', kind:'gym'},
+      ],
+    },
+    settings: { icsUrl:'', proxy:'http://localhost:8777/api/ics', lastSync:null },
+  };
+}
+
+function loadLocal(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(!raw) return null;
+    const db = JSON.parse(raw);
+    return db && db.v ? db : null;
+  }catch(e){ return null; }
+}
+function saveLocal(db){
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(db)); return true; }
+  catch(e){ console.warn('local save failed', e); return false; }
+}
+
+/* --- folder sync (Chrome/Edge only; needs an http origin, not file://) --- */
+const FS_SUPPORTED = typeof window.showDirectoryPicker === 'function';
+const idbGet = (k) => new Promise(res=>{
+  const r = indexedDB.open('ultramind-fs',1);
+  r.onupgradeneeded = () => r.result.createObjectStore('h');
+  r.onsuccess = () => { const tx = r.result.transaction('h','readonly').objectStore('h').get(k);
+    tx.onsuccess = ()=>res(tx.result||null); tx.onerror=()=>res(null); };
+  r.onerror = ()=>res(null);
+});
+const idbSet = (k,v) => new Promise(res=>{
+  const r = indexedDB.open('ultramind-fs',1);
+  r.onupgradeneeded = () => r.result.createObjectStore('h');
+  r.onsuccess = () => { const tx = r.result.transaction('h','readwrite').objectStore('h').put(v,k);
+    tx.onsuccess=()=>res(true); tx.onerror=()=>res(false); };
+  r.onerror = ()=>res(false);
+});
+
+async function fsPickFolder(){
+  const h = await window.showDirectoryPicker({ id:'ultramind-school', mode:'readwrite' });
+  await idbSet('dir', h);
+  return h;
+}
+async function fsGetFolder(){
+  const h = await idbGet('dir');
+  if(!h) return null;
+  const perm = await h.queryPermission({mode:'readwrite'});
+  if(perm === 'granted') return h;
+  return {needsPermission:true, handle:h};
+}
+async function fsWrite(handle, db){
+  const fh = await handle.getFileHandle(FS_FILE, {create:true});
+  const w = await fh.createWritable();
+  await w.write(JSON.stringify(db, null, 1));
+  await w.close();
+}
+async function fsRead(handle){
+  try{
+    const fh = await handle.getFileHandle(FS_FILE);
+    const f = await fh.getFile();
+    return JSON.parse(await f.text());
+  }catch(e){ return null; }
+}
+
+/* ============================================================
+   CLOUD SYNC — Supabase row 'school'
+   Same project and table the Command Center ('workspace') and the
+   Matrix Ledger ('ledger') use. Last write wins, by updatedAt.
+   ============================================================ */
+const SUPA_URL   = 'https://llrmrekixkrtxuyqsbwb.supabase.co';
+const SUPA_KEY   = 'sb_publishable_jD7t0YZl64xkLAPYJOfOgQ_GBnROkJv';  /* publishable (anon) key — browser-safe under RLS */
+const SUPA_TABLE = 'matrix';
+const SUPA_ROW   = 'school';
+const supa = (window.supabase && window.supabase.createClient)
+  ? window.supabase.createClient(SUPA_URL, SUPA_KEY) : null;
+
+/* Extracted deck text is the one field that can run to megabytes across a
+   semester. Cap what leaves the device; the full copy stays local. */
+const SYNC_TEXT_CAP = 60000;
+
+function toRemote(db){
+  return {
+    ...db,
+    /* The Brightspace feed token never goes in the row. The publishable key is
+       in plain sight in this file, so anything stored there is readable by
+       anyone holding it — his calendar does not belong in that blast radius. */
+    settings: { ...db.settings, icsUrl:'' },
+    materials: (db.materials||[]).map(m => (m.text && m.text.length > SYNC_TEXT_CAP)
+      ? { ...m, text: m.text.slice(0, SYNC_TEXT_CAP), textTrunc:true }
+      : m),
+  };
+}
+
+function fromRemote(remote, local){
+  const mine = new Map((local.materials||[]).map(m=>[m.id, m]));
+  return {
+    ...remote,
+    /* A truncated copy must never clobber full text this device already holds. */
+    materials: (remote.materials||[]).map(m=>{
+      const local_m = mine.get(m.id);
+      return (local_m && local_m.text && local_m.text.length > (m.text||'').length)
+        ? { ...m, text: local_m.text, textTrunc:false }
+        : m;
+    }),
+    settings: { ...(remote.settings||{}), icsUrl: (local.settings||{}).icsUrl || '' },
+  };
+}
+
+function useCloudSync(db, applyRemote, isFreshDevice){
+  const [state, setState] = useState({ status: supa ? 'connecting' : 'off', at:null, err:null });
+  const lastPushed = useRef(null);
+  const timer = useRef(null);
+  const firstPull = useRef(true);
+  const dbRef = useRef(db); dbRef.current = db;
+
+  const ok  = useCallback(()=>setState({ status:'ok', at:Date.now(), err:null }),[]);
+  /* Sync health is surfaced, never swallowed. A database that quietly vanished
+     is exactly how every device drifted onto its own copy for months. */
+  const bad = useCallback((e)=>{
+    const raw = (e && (e.message || e.error_description || e.code)) || '';
+    const err = /fetch|network|failed/i.test(raw) ? "can't reach the database"
+      : /row-level security|permission|policy/i.test(raw) ? 'the database refused the write'
+      : raw || 'unreachable';
+    setState(s=>({ status:'down', at:s.at, err }));
+  },[]);
+
+  const push = useCallback(async (dbObj)=>{
+    if(!supa) return;
+    const payload = JSON.stringify(toRemote(dbObj));
+    lastPushed.current = payload;
+    setState(s=>({ ...s, status: s.status==='down' ? 'down' : 'saving' }));
+    try{
+      const { error } = await supa.from(SUPA_TABLE)
+        .upsert({ id:SUPA_ROW, data:JSON.parse(payload), updated_at:dbObj.updatedAt });
+      if(error) bad(error); else ok();
+    }catch(e){ bad(e); }
+  },[ok, bad]);
+
+  const pull = useCallback(async ()=>{
+    if(!supa) return;
+    try{
+      const { data, error } = await supa.from(SUPA_TABLE)
+        .select('data,updated_at').eq('id', SUPA_ROW).maybeSingle();
+      if(error){ bad(error); return; }
+      ok();
+      const local = dbRef.current;
+      if(!data || !data.data){ await push(local); return; }   /* no row yet — seed it */
+      const remote = data.data;
+      /* A device opening this for the first time stamps its blank state with
+         NOW, which is newer than the real data sitting in the cloud — so a
+         pure timestamp compare left a new laptop showing seed data forever.
+         Nothing local can be worth keeping when there is no local history. */
+      const adoptWholesale = firstPull.current && isFreshDevice;
+      firstPull.current = false;
+      /* Otherwise compare the payload's own stamp, not the column, so all three
+         layers (local, OneDrive, cloud) agree on one definition of "newer". */
+      if(!adoptWholesale && !(new Date(remote.updatedAt||0) > new Date(local.updatedAt||0))) return;
+      const merged = fromRemote(remote, local);
+      lastPushed.current = JSON.stringify(toRemote(merged));
+      applyRemote(merged);
+    }catch(e){ bad(e); }
+  },[applyRemote, ok, bad, push]);
+
+  /* initial pull + realtime + focus/interval refresh */
+  useEffect(()=>{
+    if(!supa) return;
+    pull();
+    const ch = supa.channel('school-sync')
+      /* Re-pull rather than trusting payload.new: a row carrying deck text can
+         exceed the realtime payload cap and arrive truncated, or not at all. */
+      .on('postgres_changes',
+        { event:'*', schema:'public', table:SUPA_TABLE, filter:'id=eq.'+SUPA_ROW },
+        ()=>pull())
+      .subscribe();
+    const onFocus = ()=>pull();
+    window.addEventListener('focus', onFocus);
+    const iv = setInterval(pull, 30000);
+    return ()=>{ supa.removeChannel(ch); window.removeEventListener('focus', onFocus); clearInterval(iv); };
+  },[pull]);
+
+  /* debounced push on local change */
+  useEffect(()=>{
+    if(!supa) return;
+    const payload = JSON.stringify(toRemote(db));
+    if(lastPushed.current === null){ lastPushed.current = payload; return; }  /* adopt baseline */
+    if(payload === lastPushed.current) return;                                /* echo of a pull */
+    if(timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(()=>push(db), 900);
+    return ()=>{ if(timer.current) clearTimeout(timer.current); };
+  },[db, push]);
+
+  return { state, pull, push:()=>push(dbRef.current) };
+}
+
+function SyncDot({state, compact}){
+  const map = {
+    ok:        {c:T.good,  t:'Synced'},
+    saving:    {c:T.info,  t:'Saving…'},
+    connecting:{c:T.dim,   t:'Connecting…'},
+    down:      {c:T.bad,   t:'Not syncing'},
+    off:       {c:T.dimmer,t:'Offline build'},
+  };
+  const m = map[state.status] || map.off;
+  const when = state.at ? new Date(state.at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
+  return (
+    <div style={{display:'flex', alignItems:'center', gap:7, fontSize:compact?10.5:12}}>
+      <span style={{width:7, height:7, borderRadius:'50%', background:m.c, flexShrink:0,
+        boxShadow:'0 0 7px '+m.c}} className={state.status==='saving'?'pulse':''}/>
+      <span style={{color:m.c}}>{m.t}{state.status==='ok'&&when?' '+when:''}</span>
+    </div>
+  );
+}
+
+/* ============================================================
+   FILE EXTRACTION — pptx / docx / pdf / txt, all in the browser
+   ============================================================ */
+const xmlText = (xml, tag) => {
+  const out=[]; const re = new RegExp('<'+tag+'[^>]*>([\\s\\S]*?)</'+tag+'>','g');
+  let m; while((m = re.exec(xml))) out.push(m[1]);
+  return out;
+};
+const stripTags = s => s.replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<')
+                        .replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").trim();
+
+/* Office splits a line into runs wherever formatting changes, so italicising
+   two words mid-sentence produces "Doctrine of" + "Respondeat Superior".
+   Concatenating welds them. A lowercase-or-digit meeting an uppercase across a
+   run boundary is a lost space; inside a single run it is left alone. */
+function joinRuns(runs){
+  let out = '';
+  for(const r of runs){
+    if(out && /[a-z0-9,;:)]$/.test(out) && /^[A-Z(]/.test(r)) out += ' ';
+    out += r;
+  }
+  return out;
+}
+
+async function extractPPTX(file){
+  const zip = await JSZip.loadAsync(file);
+  const names = Object.keys(zip.files)
+    .filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .sort((a,b)=> (+a.match(/(\d+)/)[1]) - (+b.match(/(\d+)/)[1]));
+  const notesFor = async (i) => {
+    const n = `ppt/notesSlides/notesSlide${i}.xml`;
+    if(!zip.files[n]) return '';
+    const xml = await zip.files[n].async('string');
+    return xmlText(xml,'a:t').map(stripTags).join(' ').trim();
+  };
+  const slides = [];
+  for(let i=0;i<names.length;i++){
+    let xml = await zip.files[names[i]].async('string');
+    /* A soft line break carries no text run, so joining runs across it welds
+       words together ("Doctrine ofRespondeat"). Give it a real space first. */
+    xml = xml.replace(/<a:br\s*\/?>/g, '<a:t> </a:t>');
+    /* Each <a:p> is a paragraph; <a:t> are its text runs. Joining runs inside a
+       paragraph keeps split words together instead of shattering every line. */
+    const paras = xmlText(xml,'a:p')
+      .map(p => joinRuns(xmlText(p,'a:t').map(stripTags)))
+      .map(s => s.replace(/\s+/g,' ').trim())
+      .filter(Boolean);
+    slides.push({
+      n: i+1,
+      title: paras[0] || `Slide ${i+1}`,
+      bullets: paras.slice(1),
+      notes: await notesFor(i+1),
+    });
+  }
+  return { kind:'pptx', slides, text: slides.map(s=>[s.title,...s.bullets,s.notes].join('\n')).join('\n\n') };
+}
+
+async function extractDOCX(file){
+  const zip = await JSZip.loadAsync(file);
+  const xml = await zip.file('word/document.xml').async('string');
+  const paras = xmlText(xml,'w:p')
+    .map(p => joinRuns(xmlText(p,'w:t').map(stripTags)))
+    .map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
+  return { kind:'docx', slides:[], text: paras.join('\n') };
+}
+
+async function extractPDF(file){
+  if(!window.pdfjsLib) throw new Error('PDF engine did not load — check your connection.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({data:buf}).promise;
+  const pages = [];
+  for(let i=1;i<=doc.numPages;i++){
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    /* pdf.js emits positioned runs; a big y-jump means a new visual line. */
+    let line = '', lastY = null; const lines = [];
+    for(const it of tc.items){
+      const y = it.transform[5];
+      if(lastY !== null && Math.abs(y-lastY) > 3){ if(line.trim()) lines.push(line.trim()); line=''; }
+      line += it.str; lastY = y;
+    }
+    if(line.trim()) lines.push(line.trim());
+    pages.push({ n:i, title:`Page ${i}`, bullets:lines.filter(Boolean), notes:'' });
+  }
+  return { kind:'pdf', slides:pages, text: pages.map(p=>p.bullets.join('\n')).join('\n\n') };
+}
+
+async function extractFile(file){
+  const n = file.name.toLowerCase();
+  if(n.endsWith('.pptx')) return extractPPTX(file);
+  if(n.endsWith('.docx')) return extractDOCX(file);
+  if(n.endsWith('.pdf'))  return extractPDF(file);
+  if(n.endsWith('.ppt') || n.endsWith('.doc'))
+    throw new Error('Old .ppt/.doc format. Open it and "Save As" .pptx / .docx, then drop it here.');
+  const text = await file.text();
+  return { kind:'text', slides:[], text };
+}
+
+/* ============================================================
+   STUDY ENGINE
+   Everything here runs locally the moment a file lands, so there is
+   always something to study before any AI is involved.
+   ============================================================ */
+const STOP = new Set(('the a an and or but if then than that this these those of to in on at for with by from as is are was were be been being it its there here we you your our they them he she i not no nor so such can will would should could may might must have has had do does did what which who whom when where why how all any both each few more most other some only own same too very just now also into over under about between during before after above below up down out off again further once because while upon per via etc shall within without').split(' '));
+
+const words = s => (s.toLowerCase().match(/[a-z][a-z-]{1,}/g) || []);
+/* Split per line first. Otherwise a bullet on slide 3 runs straight into the
+   title of slide 4 and the cloze cards quote sentences that never existed. */
+const sentences = txt => String(txt||'').split(/\n+/)
+  .flatMap(block => block.replace(/\s+/g,' ').trim().split(/(?<=[.!?])\s+(?=[A-Z0-9])/))
+  .map(s=>s.trim()).filter(s=>s.length>25 && s.length<420);
+
+/* Slide furniture that shows up in every deck and teaches nothing. */
+const BOILER = /\b(objectives?|agenda|outline|overview|takeaways?|roadmap|summary|recap|references?|sources?|introduction|conclusion|questions?)\b/i;
+
+/* Terms worth memorising: repeated multi-word capitalised phrases plus
+   high-frequency content words. Frequency alone just surfaces filler. */
+function keyTerms(text, slides, limit){
+  const freq = new Map();
+  for(const w of words(text)){ if(STOP.has(w) || w.length<4) continue; freq.set(w,(freq.get(w)||0)+1); }
+  const phrases = new Map();
+  const phraseRe = /\b([A-Z][a-z]{2,}(?:\s+(?:of|and|the|for)?\s*[A-Z][a-z]{2,}){1,3})\b/g;
+  let m; while((m = phraseRe.exec(text))){
+    const p = m[1].replace(/\s+/g,' ').trim();
+    if(p.split(' ').every(w=>STOP.has(w.toLowerCase()))) continue;
+    phrases.set(p,(phrases.get(p)||0)+1);
+  }
+  /* Slide and section titles are the author telling you what matters. */
+  const titleBoost = new Set((slides||[]).map(s=>(s.title||'').trim()).filter(t=>t.length>3&&t.length<70));
+  const scored = [];
+  for(const [p,c] of phrases) scored.push({term:p, score:c*3 + (titleBoost.has(p)?6:0), n:c});
+  for(const [w,c] of freq) if(c>=3 && !/^\d+$/.test(w)) scored.push({term:w, score:c, n:c});
+  const seen = new Set(); const out=[];
+  for(const s of scored.sort((a,b)=>b.score-a.score)){
+    const k = s.term.toLowerCase();
+    if(seen.has(k) || BOILER.test(s.term)) continue;
+    if([...seen].some(x => x.includes(k) || k.includes(x))) continue;
+    seen.add(k); out.push(s);
+    if(out.length >= (limit||28)) break;
+  }
+  return out;
+}
+
+/* Two shapes carry definitions: a sentence that says X is Y, and a
+   heading followed by its explanation. Catch both. */
+function definitions(text, slides){
+  const out = [];
+  const push = (t,d) => {
+    t = t.replace(/^[\s\u2022\-\*\d.)]+/,'').trim(); d = d.trim();
+    if(t.length<3 || t.length>70 || d.length<18 || d.length>420) return;
+    /* Fill-in-the-blank worksheet slides ("Employee = Employer = Plaintiff =")
+       are not definitions. Require real prose, not a skeleton to fill in. */
+    const real = (d.replace(/_+/g,' ').match(/[A-Za-z]{3,}/g)||[]).length;
+    const blankRatio = (d.match(/[_=]/g)||[]).length / d.length;
+    if(real < 6 || blankRatio > 0.12) return;
+    if(out.some(o=>o.term.toLowerCase()===t.toLowerCase())) return;
+    out.push({term:t, def:d});
+  };
+  for(const s of sentences(text)){
+    let m = s.match(/^(.{3,70}?)\s+(?:is|are)\s+(?:defined as|the process of|a process|an?|the)\s+(.{18,})$/i);
+    if(m){ push(m[1], m[2]); continue; }
+    m = s.match(/^(.{3,70}?)\s+(?:refers to|means|describes|is known as|consists of)\s+(.{18,})$/i);
+    if(m){ push(m[1], m[2]); continue; }
+    m = s.match(/^(.{3,60}?)\s*[\u2013\u2014:\u2012]\s+(.{18,})$/);
+    if(m && /^[A-Z]/.test(m[1])){ push(m[1], m[2]); }
+  }
+  /* Deck shape: a slide whose title is the term and whose bullets define it. */
+  for(const sl of (slides||[])){
+    const t = (sl.title||'').trim();
+    const body = (sl.bullets||[]).join(' ').trim();
+    /* Boilerplate slide titles are not terms. "Learning Objectives" as a
+       flashcard is pure noise, and every deck has one. */
+    if(t && t.length<70 && body.length>25 && !BOILER.test(t) && !/^(slide|page) \d+$/i.test(t))
+      push(t, body.slice(0,400));
+  }
+  return out;
+}
+
+/* Cloze: blank a key term inside a real sentence from the source. */
+function clozeCards(text, terms, limit){
+  const out = []; const used = new Set();
+  const ss = sentences(text);
+  for(const t of terms){
+    if(out.length >= (limit||20)) break;
+    const re = new RegExp('\\b'+t.term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i');
+    const hit = ss.find(s => re.test(s) && !used.has(s) && s.length<300);
+    if(!hit) continue;
+    used.add(hit);
+    out.push({ front: hit.replace(re,'______'), back: t.term, kind:'cloze' });
+  }
+  return out;
+}
+
+function chunkPlainText(text){
+  const paras = text.split(/\n{2,}/).map(p=>p.trim()).filter(p=>p.length>40);
+  return paras.slice(0,60).map((p,i)=>{
+    const lines = p.split('\n').map(s=>s.trim()).filter(Boolean);
+    return { head: (lines[0]||'').slice(0,90) || ('Section '+(i+1)), points: lines.slice(1,9) };
+  });
+}
+
+/* Pick the study method that fits the material, instead of defaulting
+   to make-flashcards for everything. */
+function contentShape(text, defs, slides){
+  const w = words(text).length || 1;
+  const numeric = (text.match(/\d+(?:\.\d+)?%?/g)||[]).length / w;
+  const formula = (text.match(/[=+*/^]\s*\d|\bratio\b|\bformula\b|\bcalculate\b|\bequation\b/gi)||[]).length;
+  const process = (text.match(/\bstep \d|\bstage \d|\bphase \d|\bfirst,|\bthen,|\bfinally,|\bprocess\b/gi)||[]).length;
+  const defRate = defs.length / Math.max(1, slides.length || 12);
+
+  if(formula > 6 || numeric > 0.05)
+    return { key:'problems', label:'Worked problems',
+      why:'Formula- and number-heavy. Flashcards will not move the needle here; reps on problems will.',
+      how:['Rebuild each formula from a blank page before you look at it.',
+           'Work 3 problems per formula, then 3 more mixed together so you have to pick the right tool.',
+           'Keep a list of every problem you got wrong and redo only those the night before.'] };
+  if(process > 8)
+    return { key:'sequence', label:'Sequence recall',
+      why:'Mostly processes and ordered stages. These exams ask what comes next and which stage is this.',
+      how:['Draw the full sequence from memory on one page.',
+           'Cover it and say each step out loud in order.',
+           'For each step: what triggers it, what it produces, what breaks if you skip it.'] };
+  if(defRate > 0.5 || defs.length > 12)
+    return { key:'terms', label:'Term drilling',
+      why:'Definition-dense. Cheapest material to score on, and it is pure recall.',
+      how:['Run the flashcards until each one is right twice in a row.',
+           'Then flip it: read the definition and name the term.',
+           'Group the terms that get confused with each other and write the one-line difference.'] };
+  return { key:'concepts', label:'Explain-it-back',
+    why:'Conceptual. Recognition will feel like knowing it, then fail you on the exam.',
+    how:['Close the deck and write the main argument in 5 sentences.',
+         'For each section write one question the professor could ask, then answer it cold.',
+         'Find the two ideas that sound similar and write down how they differ.'] };
+}
+
+function buildStudyPack(extract, courseId, materialId){
+  const text = extract.text || '';
+  const slides = extract.slides || [];
+  const terms = keyTerms(text, slides, 30);
+  const defs  = definitions(text, slides);
+  const cloze = clozeCards(text, terms, 18);
+
+  const cards = [
+    ...defs.slice(0,40).map(d=>({front:'What is '+d.term+'?', back:d.def, kind:'definition'})),
+    ...cloze,
+  ].map(c=>({
+    id: uid(), courseId, materialId, front:c.front, back:c.back, kind:c.kind,
+    box:1, due:new Date().toISOString(), seen:0, right:0, wrong:0,
+  }));
+
+  const sections = slides.length
+    ? slides.map(s=>({ head:s.title, points:[...(s.bullets||[]), ...(s.notes?['(speaker notes) '+s.notes]:[])].slice(0,10) }))
+    : chunkPlainText(text);
+
+  const shape = contentShape(text, defs, slides);
+  return { terms, defs, cards, sections, shape,
+           stats:{ words: words(text).length, slides: slides.length, defs: defs.length, cards: cards.length } };
+}
+
+/* Spaced repetition - Leitner boxes. Intervals in days, indexed by box. */
+const BOX_DAYS = [0, 1, 3, 7, 21];
+function gradeCard(card, correct){
+  const box = correct ? clamp(card.box+1, 1, 5) : 1;
+  const due = new Date(Date.now() + BOX_DAYS[box-1]*DAY).toISOString();
+  return { ...card, box, due, seen:(card.seen||0)+1,
+           right:(card.right||0)+(correct?1:0), wrong:(card.wrong||0)+(correct?0:1) };
+}
+const cardDue = c => new Date(c.due) <= new Date();
+
+/* ============================================================
+   PROMPT PACK — the handoff to Claude for real teaching
+   ============================================================ */
+function teachPrompt(mat, course){
+  const body = (mat.pack.sections||[]).map(s =>
+    '## ' + s.head + '\n' + (s.points||[]).map(p=>'- '+p).join('\n')
+  ).join('\n\n');
+  return [
+    'Teach me this deck like I have not been paying attention in class, because I have not.',
+    'Course: ' + (course ? course.code + ' - ' + course.name : 'unknown'),
+    'Material: ' + mat.name,
+    '',
+    'Do this in order:',
+    '1. The 5 things I actually have to walk out knowing. No filler.',
+    '2. Explain each one in plain English with an example from running a small business.',
+    '3. The 3 things a professor is most likely to put on the exam, and how they would word it.',
+    '4. The traps - what students get wrong on this material.',
+    '5. Quiz me with 8 questions, hardest last. Do not give me the answers until I answer.',
+    '',
+    '--- SOURCE MATERIAL ---',
+    body.slice(0, 24000),
+  ].join('\n');
+}
+
+function examPrompt(course, exam, mats, events){
+  const covered = mats.map(m=>'- '+m.name).join('\n') || '- (nothing uploaded yet)';
+  const topics = mats.flatMap(m => (m.pack.terms||[]).slice(0,12).map(t=>t.term));
+  const uniqTopics = [...new Set(topics)].slice(0, 60);
+  return [
+    'I have an exam and I need a cram plan that respects how little time I have.',
+    'Course: ' + course.code + ' - ' + course.name,
+    'Exam: ' + exam.title,
+    'Date: ' + fmtDate(icsToDate(exam.at), {weekday:'long',month:'long',day:'numeric'}),
+    'Days from today: ' + daysUntil(icsToDate(exam.at)),
+    '',
+    'Material I have uploaded:',
+    covered,
+    '',
+    'Key terms pulled out of that material:',
+    uniqTopics.join(', ') || '(none yet)',
+    '',
+    'Give me:',
+    '1. A day-by-day plan from today to the exam, in blocks of 45 minutes, assuming I run a business and will not do more than 2 blocks a day.',
+    '2. The highest-yield 20% of this material - what to study if I only get one session.',
+    '3. A one-page cheat sheet I could rebuild from memory.',
+    '4. 10 practice questions in the format this exam uses, then the answer key separately.',
+  ].join('\n');
+}
+
+/* ============================================================
+   TRIAGE + PLANNER
+   The point is not to list everything. It is to answer
+   "what do I do right now" for someone who will not read a list.
+   ============================================================ */
+function scoreItem(ev, course){
+  const d = icsToDate(ev.at);
+  const n = daysUntil(d);
+  const t = workType(ev);
+  const base = TYPE_META[t].weight;
+  /* Urgency curve: overdue and today dominate, then it decays fast. */
+  let urgency;
+  if(n < 0) urgency = 130;
+  else if(n === 0) urgency = 120;
+  else if(n === 1) urgency = 85;
+  else urgency = Math.max(4, 70 - n*4);
+  return Math.round(base * 0.55 + urgency);
+}
+
+function triage(db, horizonDays){
+  const H = horizonDays || 14;
+  const now = startOfDay(new Date());
+  const out = [];
+  for(const ev of db.events){
+    if(!isWork(ev)) continue;
+    if(db.done[ev.uid]) continue;
+    const d = icsToDate(ev.at);
+    const n = daysUntil(d);
+    /* The feed carries no completion status, so anything past due is only a
+       candidate. Two weeks back is enough to catch real misses without
+       resurrecting the whole semester. */
+    if(n > H || n < -14) continue;
+    const course = courseFor(ev.course, db.courses);
+    out.push({ ev, course, date:d, days:n, type:workType(ev), score:scoreItem(ev, course) });
+  }
+  return out.sort((a,b)=> b.score - a.score || a.date - b.date);
+}
+
+function upcomingExams(db){
+  return db.events
+    .filter(e => isExam(e) && (e.kind==='due' || e.kind==='open'))
+    .map(e => ({ ...e, date:icsToDate(e.at), course:courseFor(e.course, db.courses) }))
+    /* An exam window shows up as open + due; the due date is the wall. */
+    .filter(e => e.kind === 'due' && daysUntil(e.date) >= -1)
+    .sort((a,b)=> a.date - b.date);
+}
+
+/* Build a prep ramp backwards from an exam: spaced sessions, never a
+   single all-nighter, and nothing scheduled on a Matrix Saturday. */
+const SAT = 6;
+function prepPlan(exam, db){
+  const days = daysUntil(exam.date);
+  if(days < 0) return [];
+  const sessions = days >= 14 ? 6 : days >= 7 ? 5 : days >= 4 ? 4 : days >= 2 ? 3 : 2;
+  const stages = [
+    { label:'Map the material',   what:'Skim every deck and reading. Build the one-page outline. Do not memorise yet.' },
+    { label:'First pass recall',  what:'Run every flashcard once. Mark what you miss. That list is your real syllabus.' },
+    { label:'Attack the misses',  what:'Only the cards you got wrong. Re-read just those sections, then re-drill.' },
+    { label:'Practice under pressure', what:'Practice questions with a timer. No notes. Score yourself honestly.' },
+    { label:'Mixed review',       what:'Shuffle everything together so you have to identify the topic, not just recall it.' },
+    { label:'Final sweep',        what:'One pass over the outline out loud, then the 10 hardest cards. Then stop and sleep.' },
+  ];
+  const picked = stages.slice(0, sessions);
+  const out = [];
+  const today = startOfDay(new Date()).getTime();
+  const span = Math.max(0, days - 1);        /* last session lands the day before */
+  for(let i=0;i<picked.length;i++){
+    /* Stage 0 is today and the final sweep is the day before the exam, so the
+       offset has to grow with i. Running it the other way puts the last-night
+       review first, which is exactly backwards. */
+    const offset = Math.round(span * (i / Math.max(1, picked.length - 1)));
+    let when = new Date(today + offset * DAY);
+    /* Saturdays are Matrix jobs. Pull the session earlier, never later. */
+    if(when.getDay() === SAT) when = new Date(when.getTime() - DAY);
+    if(when.getTime() < today) when = new Date(today);
+    out.push({ ...picked[i], date: when, minutes: 45 });
+  }
+  return out.sort((a,b)=>a.date-b.date);
+}
+
+/* ============================================================
+   UI ATOMS
+   ============================================================ */
+const Card = ({children, style, onClick, className}) => (
+  <div onClick={onClick} className={className}
+    style={{background:T.panel, border:'1px solid '+T.line, borderRadius:14, padding:16, ...(style||{})}}>
+    {children}
+  </div>
+);
+const Pill = ({children, tone, style}) => (
+  <span style={{fontSize:10.5, fontWeight:700, letterSpacing:.7, textTransform:'uppercase',
+    padding:'3px 8px', borderRadius:999, color:tone||T.dim,
+    background:(tone||T.dim)+'1f', border:'1px solid '+(tone||T.dim)+'3a', whiteSpace:'nowrap', ...(style||{})}}>
+    {children}
+  </span>
+);
+const Btn = ({children, onClick, tone, ghost, style, disabled, title}) => (
+  <button onClick={onClick} disabled={disabled} title={title}
+    style={{
+      background: disabled ? 'rgba(255,255,255,.04)' : ghost ? 'transparent' : (tone||T.accent),
+      color: disabled ? T.dimmer : ghost ? (tone||T.text) : '#fff',
+      border:'1px solid '+(ghost ? (tone||T.line) : 'transparent'),
+      borderRadius:10, padding:'9px 14px', fontWeight:600, fontSize:13,
+      cursor: disabled?'not-allowed':'pointer', transition:'all .15s', whiteSpace:'nowrap', ...(style||{})
+    }}>{children}</button>
+);
+const Empty = ({icon, title, sub}) => (
+  <div style={{textAlign:'center', padding:'48px 20px', color:T.dimmer}}>
+    <div style={{fontSize:34, marginBottom:10, opacity:.5}}>{icon}</div>
+    <div style={{fontSize:15, color:T.dim, fontWeight:600, marginBottom:5}}>{title}</div>
+    {sub && <div style={{fontSize:12.5, maxWidth:400, margin:'0 auto', lineHeight:1.6}}>{sub}</div>}
+  </div>
+);
+const H = ({children, sub, right}) => (
+  <div style={{display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:16, gap:16, flexWrap:'wrap'}}>
+    <div>
+      <div style={{fontSize:23, fontWeight:800, letterSpacing:-.4}}>{children}</div>
+      {sub && <div style={{fontSize:12.5, color:T.dim, marginTop:4}}>{sub}</div>}
+    </div>
+    {right}
+  </div>
+);
+function useCopy(){
+  const [copied,setCopied] = useState(false);
+  const copy = useCallback(async (text)=>{
+    try{ await navigator.clipboard.writeText(text); }
+    catch(e){
+      /* Clipboard API needs a secure origin; fall back for file:// */
+      const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta);
+      ta.select(); try{document.execCommand('copy');}catch(_){} ta.remove();
+    }
+    setCopied(true); setTimeout(()=>setCopied(false), 1600);
+  },[]);
+  return [copied, copy];
+}
+
+/* A row for one piece of work. Same shape everywhere it appears. */
+function WorkRow({item, done, onToggle}){
+  const meta = TYPE_META[item.type];
+  const lab = dueLabel(item.date);
+  const toneMap = {bad:T.bad, warn:T.warn, dim:T.dim};
+  return (
+    <div style={{display:'flex', alignItems:'center', gap:12, padding:'11px 13px',
+      background:T.panel2, border:'1px solid '+(lab.tone==='bad'?T.bad+'40':T.line),
+      borderRadius:11, opacity:done?.45:1}}>
+      <button onClick={onToggle} title={done?'Mark not done':'Mark done'}
+        style={{width:19, height:19, flexShrink:0, borderRadius:6, border:'1.5px solid '+(done?T.good:T.dimmer),
+          background:done?T.good:'transparent', color:'#08090d', fontSize:12, fontWeight:900, lineHeight:'16px'}}>
+        {done?'✓':''}
+      </button>
+      <div style={{width:3, height:26, borderRadius:2, background:item.course?item.course.color:T.dimmer, flexShrink:0}} />
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{fontSize:13.5, fontWeight:600, textDecoration:done?'line-through':'none'}} className="clamp2">
+          {item.ev.title}
+        </div>
+        <div style={{fontSize:11, color:T.dim, marginTop:3, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+          <span style={{color:item.course?item.course.color:T.dim, fontWeight:700}}>
+            {item.course ? item.course.code : item.ev.course}
+          </span>
+          <span style={{color:meta.tone}}>{meta.icon} {meta.label}</span>
+          <span>{fmtDate(item.date)}</span>
+        </div>
+      </div>
+      <Pill tone={toneMap[lab.tone]}>{lab.txt}</Pill>
+      {item.ev.link && (
+        <a href={item.ev.link} target="_blank" rel="noreferrer" title="Open in Brightspace"
+          style={{color:T.dim, fontSize:15, textDecoration:'none', padding:'0 2px'}}>&#8599;</a>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   TODAY — the only screen that matters on a normal day
+   ============================================================ */
+function TodayView({db, setDb, go}){
+  const items = useMemo(()=>triage(db, 14), [db]);
+  const exams = useMemo(()=>upcomingExams(db), [db]);
+  const nextExam = exams[0];
+  const dueCards = db.cards.filter(cardDue).length;
+  const toggle = uidv => setDb(d => {
+    const done = {...d.done};
+    if(done[uidv]) delete done[uidv]; else done[uidv] = new Date().toISOString();
+    return {...d, done};
+  });
+
+  const nowList = items.slice(0,3);
+  const week = items.filter(i=>i.days>=0 && i.days<=7);
+  const later = items.filter(i=>i.days>7);
+  const late  = items.filter(i=>i.days<0);
+
+  return (
+    <div className="fade-in">
+      <H sub={new Date().toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric', year:'numeric'})}>
+        Today
+      </H>
+
+      {nextExam && (
+        <Card style={{marginBottom:18, background:'linear-gradient(135deg, rgba(232,90,120,.13), rgba(14,16,22,.9))',
+          borderColor:daysUntil(nextExam.date)<=7?T.bad+'55':T.line}}
+          className={daysUntil(nextExam.date)<=3?'glow-red':''}>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:18, flexWrap:'wrap'}}>
+            <div style={{minWidth:0}}>
+              <Pill tone={T.bad}>Next exam</Pill>
+              <div style={{fontSize:17, fontWeight:700, marginTop:9}}>{nextExam.title}</div>
+              <div style={{fontSize:12.5, color:T.dim, marginTop:4}}>
+                <span style={{color:nextExam.course?nextExam.course.color:T.dim, fontWeight:700}}>
+                  {nextExam.course?nextExam.course.code:nextExam.course}
+                </span>
+                {'  ·  '}{fmtDate(nextExam.date,{weekday:'long', month:'long', day:'numeric'})}
+              </div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:46, fontWeight:900, lineHeight:1, letterSpacing:-2,
+                color:daysUntil(nextExam.date)<=7?T.bad:T.text}}>
+                {Math.max(0,daysUntil(nextExam.date))}
+              </div>
+              <div style={{fontSize:11, color:T.dim, letterSpacing:1, textTransform:'uppercase', marginTop:3}}>days out</div>
+            </div>
+          </div>
+          <div style={{marginTop:14, display:'flex', gap:9, flexWrap:'wrap'}}>
+            <Btn onClick={()=>go({view:'exams'})}>Open prep plan</Btn>
+            {dueCards>0 && <Btn ghost tone={T.line} onClick={()=>go({view:'review'})}>Review {dueCards} cards</Btn>}
+          </div>
+        </Card>
+      )}
+
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(210px,1fr))', gap:12, marginBottom:20}}>
+        <Stat label="Due in 7 days" value={week.length} tone={week.length>6?T.warn:T.text}/>
+        <Stat label="Overdue" value={late.length} tone={late.length?T.bad:T.dimmer}/>
+        <Stat label="Cards to review" value={dueCards} tone={dueCards?T.accent2:T.dimmer}/>
+        <Stat label="Exams left" value={exams.length} tone={T.text}/>
+      </div>
+
+      <div style={{marginBottom:12, fontSize:12, letterSpacing:1, textTransform:'uppercase',
+        color:T.dim, fontWeight:700}}>Do these first</div>
+      {nowList.length ? (
+        <div style={{display:'grid', gap:9, marginBottom:24}}>
+          {nowList.map(i=><WorkRow key={i.ev.uid} item={i} done={!!db.done[i.ev.uid]} onToggle={()=>toggle(i.ev.uid)}/>)}
+        </div>
+      ) : <Card style={{marginBottom:24}}><Empty icon="✓" title="Nothing urgent" sub="Nothing is due in the next two weeks that you have not already checked off."/></Card>}
+
+      {late.length>0 && <Section title={'Past due ('+late.length+')'} tone={T.bad}>
+        <div style={{fontSize:11.5, color:T.dimmer, lineHeight:1.6, marginBottom:2}}>
+          Brightspace does not publish what you have already submitted, so this is
+          everything whose deadline passed in the last two weeks. Check off what you turned in
+          and it stays gone.
+        </div>
+        {late.map(i=><WorkRow key={i.ev.uid} item={i} done={!!db.done[i.ev.uid]} onToggle={()=>toggle(i.ev.uid)}/>)}
+      </Section>}
+
+      <Section title={'This week ('+week.length+')'}>
+        {week.length ? week.map(i=><WorkRow key={i.ev.uid} item={i} done={!!db.done[i.ev.uid]} onToggle={()=>toggle(i.ev.uid)}/>)
+          : <div style={{color:T.dimmer, fontSize:13, padding:'6px 2px'}}>Clear.</div>}
+      </Section>
+
+      {later.length>0 && <Section title={'Next two weeks ('+later.length+')'}>
+        {later.map(i=><WorkRow key={i.ev.uid} item={i} done={!!db.done[i.ev.uid]} onToggle={()=>toggle(i.ev.uid)}/>)}
+      </Section>}
+    </div>
+  );
+}
+const Stat = ({label,value,tone}) => (
+  <Card style={{padding:'14px 16px'}}>
+    <div style={{fontSize:29, fontWeight:800, color:tone||T.text, lineHeight:1.1}}>{value}</div>
+    <div style={{fontSize:11, color:T.dim, marginTop:5, letterSpacing:.6, textTransform:'uppercase'}}>{label}</div>
+  </Card>
+);
+const Section = ({title, tone, children}) => (
+  <div style={{marginBottom:24}}>
+    <div style={{marginBottom:10, fontSize:12, letterSpacing:1, textTransform:'uppercase',
+      color:tone||T.dim, fontWeight:700}}>{title}</div>
+    <div style={{display:'grid', gap:9}}>{children}</div>
+  </div>
+);
+
+/* ============================================================
+   COURSE TAB
+   ============================================================ */
+function CourseView({db, setDb, course, go}){
+  const [tab,setTab] = useState('work');
+  const evs = db.events.filter(e => courseFor(e.course, db.courses) === course);
+  const work = evs.filter(isWork).map(e=>({ev:e, course, date:icsToDate(e.at), days:daysUntil(icsToDate(e.at)), type:workType(e), score:0}))
+    .sort((a,b)=>a.date-b.date);
+  const upcoming = work.filter(w=>w.days>=0 && !db.done[w.ev.uid]);
+  const pastOrDone = work.filter(w=>w.days<0 || db.done[w.ev.uid]);
+  const exams = work.filter(w=>w.type==='exam' && w.days>=-1);
+  const mats = db.materials.filter(m=>m.courseId===course.id);
+  const cards = db.cards.filter(c=>c.courseId===course.id);
+  const due = cards.filter(cardDue).length;
+  const toggle = uidv => setDb(d=>{ const done={...d.done};
+    if(done[uidv]) delete done[uidv]; else done[uidv]=new Date().toISOString(); return {...d,done}; });
+
+  const TABS = [['work','Work '+upcoming.length],['exams','Exams '+exams.length],
+                ['materials','Materials '+mats.length],['cards','Cards '+cards.length],['done','Done']];
+  return (
+    <div className="fade-in">
+      <H sub={course.name + '  ·  Section ' + course.section + '  ·  ' + course.mode.replace('-',' ')}
+        right={<div style={{display:'flex', gap:8}}>
+          {due>0 && <Btn onClick={()=>go({view:'review', courseId:course.id})}>Review {due}</Btn>}
+          <a href={'https://brightspace.missouristate.edu/d2l/home/'+course.ou} target="_blank" rel="noreferrer"
+            style={{textDecoration:'none'}}>
+            <Btn ghost tone={T.line}>Brightspace &#8599;</Btn>
+          </a>
+        </div>}>
+        <span style={{color:course.color}}>{course.code}</span>
+      </H>
+
+      <div style={{display:'flex', gap:6, marginBottom:18, flexWrap:'wrap'}}>
+        {TABS.map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)}
+            style={{padding:'7px 13px', borderRadius:9, fontSize:12.5, fontWeight:600,
+              background: tab===k ? course.color+'22' : 'transparent',
+              color: tab===k ? course.color : T.dim,
+              border:'1px solid '+(tab===k ? course.color+'55' : T.line)}}>{l}</button>
+        ))}
+      </div>
+
+      {tab==='work' && (upcoming.length
+        ? <div style={{display:'grid', gap:9}}>{upcoming.map(i=><WorkRow key={i.ev.uid} item={i} done={false} onToggle={()=>toggle(i.ev.uid)}/>)}</div>
+        : evs.length===0
+          ? <Card><Empty icon="!" title="This course publishes nothing to the calendar"
+              sub="Its Brightspace shell has no dated events, so nothing can sync here automatically. Open it in Brightspace to see quizzes and assignments, and add its material to the Study Lab manually."/></Card>
+          : <Card><Empty icon="✓" title="Nothing left open" sub="Every dated item in this course is done or past."/></Card>)}
+
+      {tab==='exams' && (exams.length
+        ? <div style={{display:'grid', gap:12}}>
+            {exams.map(e=><ExamCard key={e.ev.uid} exam={{...e.ev, date:e.date, course}} db={db} mats={mats}/>)}
+          </div>
+        : <Card><Empty icon="⚑" title="No exams on the calendar" sub="Nothing in this course's Brightspace feed is tagged as an exam."/></Card>)}
+
+      {tab==='materials' && <MaterialList db={db} setDb={setDb} courseId={course.id} go={go}/>}
+
+      {tab==='cards' && (cards.length
+        ? <div>
+            <div style={{marginBottom:12, color:T.dim, fontSize:13}}>
+              {cards.length} cards · {due} due now · {cards.filter(c=>c.box>=4).length} locked in
+            </div>
+            <div style={{display:'grid', gap:8}}>
+              {cards.slice(0,80).map(c=>(
+                <div key={c.id} style={{background:T.panel2, border:'1px solid '+T.line, borderRadius:10, padding:'10px 13px'}}>
+                  <div style={{fontSize:13, fontWeight:600}}>{c.front}</div>
+                  <div style={{fontSize:12, color:T.dim, marginTop:4}}>{c.back}</div>
+                  <div style={{marginTop:6, display:'flex', gap:7, alignItems:'center'}}>
+                    <Pill tone={c.box>=4?T.good:c.box>=2?T.warn:T.dimmer}>Box {c.box}</Pill>
+                    <span style={{fontSize:10.5, color:T.dimmer}}>{c.kind}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        : <Card><Empty icon="◆" title="No cards yet" sub="Upload a PowerPoint or PDF under Materials and cards get built automatically."/></Card>)}
+
+      {tab==='done' && (pastOrDone.length
+        ? <div style={{display:'grid', gap:9}}>{pastOrDone.slice().reverse().map(i=>
+            <WorkRow key={i.ev.uid} item={i} done={!!db.done[i.ev.uid]} onToggle={()=>toggle(i.ev.uid)}/>)}</div>
+        : <Card><Empty icon="○" title="Nothing here yet"/></Card>)}
+    </div>
+  );
+}
+
+function ExamCard({exam, db, mats}){
+  const [open,setOpen] = useState(false);
+  const [copied,copy] = useCopy();
+  const plan = useMemo(()=>prepPlan(exam, db), [exam.uid]);
+  const n = daysUntil(exam.date);
+  return (
+    <Card style={{borderColor: n<=7 ? T.bad+'55' : T.line}}>
+      <div style={{display:'flex', justifyContent:'space-between', gap:16, alignItems:'flex-start', flexWrap:'wrap'}}>
+        <div style={{minWidth:0, flex:1}}>
+          <div style={{fontSize:15, fontWeight:700}}>{exam.title}</div>
+          <div style={{fontSize:12, color:T.dim, marginTop:4}}>
+            {exam.course && <span style={{color:exam.course.color, fontWeight:700}}>{exam.course.code}{'  ·  '}</span>}
+            {fmtDate(exam.date,{weekday:'long', month:'long', day:'numeric'})}
+          </div>
+        </div>
+        <div style={{textAlign:'right'}}>
+          <div style={{fontSize:27, fontWeight:900, color:n<=7?T.bad:T.text, lineHeight:1}}>{Math.max(0,n)}</div>
+          <div style={{fontSize:10, color:T.dim, textTransform:'uppercase', letterSpacing:.8}}>days</div>
+        </div>
+      </div>
+      <div style={{marginTop:13, display:'flex', gap:8, flexWrap:'wrap'}}>
+        <Btn ghost tone={T.line} onClick={()=>setOpen(!open)}>{open?'Hide':'Show'} {plan.length}-session plan</Btn>
+        {exam.course && <Btn ghost tone={T.accent2}
+          onClick={()=>copy(examPrompt(exam.course, exam, mats||[], db.events))}>
+          {copied ? 'Copied — paste to Claude' : 'Copy cram-plan prompt'}
+        </Btn>}
+      </div>
+      {open && (
+        <div style={{marginTop:14, display:'grid', gap:8}}>
+          {plan.map((p,i)=>(
+            <div key={i} style={{display:'flex', gap:12, alignItems:'flex-start', background:T.panel2,
+              border:'1px solid '+T.line, borderRadius:10, padding:'10px 13px'}}>
+              <div style={{textAlign:'center', minWidth:52}}>
+                <div style={{fontSize:11, color:T.dim, textTransform:'uppercase', letterSpacing:.5}}>
+                  {p.date.toLocaleDateString('en-US',{weekday:'short'})}</div>
+                <div style={{fontSize:16, fontWeight:800}}>{p.date.getDate()}</div>
+              </div>
+              <div style={{flex:1, minWidth:0}}>
+                <div style={{fontSize:13, fontWeight:600}}>{p.label} <span style={{color:T.dimmer, fontWeight:400}}>· {p.minutes} min</span></div>
+                <div style={{fontSize:12, color:T.dim, marginTop:3, lineHeight:1.5}}>{p.what}</div>
+              </div>
+            </div>
+          ))}
+          <div style={{fontSize:11.5, color:T.dimmer, lineHeight:1.6, marginTop:2}}>
+            Saturdays are skipped automatically — those are Matrix high-ticket days.
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+
+/* ============================================================
+   UNITS
+   Every course already tells you how it is divided — LAW 532 by Unit,
+   MKT 364 by chapter-test cluster, LAW 332 by Week. Read that out of the
+   calendar instead of making him invent a filing scheme.
+   ============================================================ */
+
+const ROMAN = {I:1,II:2,III:3,IV:4,V:5,VI:6,VII:7,VIII:8,IX:9,X:10};
+const romanVal = s => ROMAN[String(s).toUpperCase()] || parseInt(s,10) || 0;
+
+/* Strip the noise so "FINAL EXAM Business Organizations Unit III Exam"
+   yields the topic "Business Organizations". */
+function unitTopic(title){
+  return String(title||'')
+    .replace(/\b(final|comprehensive|bonus)\b/ig,'')
+    .replace(/\bunit\s+([ivx]+|\d+)\b/ig,'')
+    .replace(/\bexam\s*#?\s*\d*\b/ig,'')
+    .replace(/\bquiz\b/ig,'')
+    .replace(/\btest\b/ig,'')
+    .replace(/\bchapter\s*\d+\b/ig,'')
+    .replace(/\b(LAW|FIN|MKT)\s*\d+\s*\/?\s*\d*\b/ig,'')
+    .replace(/\b\d{2}\b/g,'')
+    .replace(/[\/\-–—:]+/g,' ')
+    .replace(/\s{2,}/g,' ')
+    .trim();
+}
+
+function courseUnits(db, course){
+  /* Brightspace course shells carry content reused from earlier semesters —
+     LAW 532 still lists a "Unit III Bus Org Review" dated 2021. Those inherit
+     the current course code, so they must be dropped by DATE or they invent
+     units that do not exist this term. One semester back is the widest a live
+     course can legitimately reach. */
+  const cutoff = startOfDay(new Date()).getTime() - 150*DAY;
+  const evs = db.events
+    .filter(e => courseFor(e.course, db.courses) === course)
+    .filter(e => { const d = icsToDate(e.at); return d && d.getTime() >= cutoff; });
+  const out = [];
+
+  /* 1. Explicit Week / Unit / Module headings. LAW 332 is built this way and
+        has no exams at all, so nothing else would find its structure. */
+  const marked = new Map();
+  for(const e of evs){
+    const m = e.title.match(/^(Week|Unit|Module|Part)\s+([IVXivx]+|\d+)\s*[:\-–]?\s*(.*)$/i);
+    if(!m) continue;
+    const label = m[1].charAt(0).toUpperCase()+m[1].slice(1).toLowerCase()+' '+m[2].toUpperCase();
+    const prev = marked.get(label);
+    const topic = (m[3]||'').trim();
+    const date = icsToDate(e.at);
+    if(!prev || (topic && !prev.sub)) marked.set(label, {
+      id:'u-'+label.toLowerCase().replace(/\s+/g,''), label,
+      sub: topic || (prev&&prev.sub) || '',
+      order: romanVal(m[2]), date: prev && prev.date < date ? prev.date : date,
+    });
+  }
+  if(marked.size >= 2){
+    out.push(...[...marked.values()].sort((a,b)=>a.order-b.order));
+  }
+
+  /* 2. Otherwise the exam schedule defines the units: everything tested on one
+        day is one unit. MKT posts four chapter tests per date — one unit. */
+  if(!out.length){
+    const byDate = new Map();
+    for(const e of evs){
+      if(!isExam(e) || e.kind !== 'due') continue;
+      const k = e.at.slice(0,8);
+      if(!byDate.has(k)) byDate.set(k, []);
+      byDate.get(k).push(e);
+    }
+    const keys = [...byDate.keys()].sort();
+    keys.forEach((k, i) => {
+      const group = byDate.get(k);
+      const titles = group.map(g=>g.title);
+      let label = '', sub = '';
+      const unitM = titles.map(t=>t.match(/\bUnit\s+([IVX]+|\d+)\b/i)).find(Boolean);
+      const chapters = titles.flatMap(t=>{
+        const m = t.match(/\bChapter\s*(\d+)\b/i); return m ? [parseInt(m[1],10)] : [];
+      }).sort((a,b)=>a-b);
+      const examM = titles.map(t=>t.match(/\bExam\s*#?\s*(\d+)\b/i)).find(Boolean);
+
+      if(unitM)            label = 'Unit ' + unitM[1].toUpperCase();
+      else if(chapters.length) label = chapters.length>1
+        ? 'Ch ' + chapters[0] + '–' + chapters[chapters.length-1]
+        : 'Ch ' + chapters[0];
+      else if(examM)       label = 'Exam ' + examM[1];
+      else                 label = 'Exam ' + (i+1);
+
+      sub = titles.map(unitTopic).find(t=>t.length>3) || '';
+      out.push({ id:'u-'+k, label, sub, order:i+1, date:icsToDate(group[0].at) });
+    });
+  }
+
+  /* 3. FIN 380 never names its exams — it only posts "Pre-Exam #N Quiz" a few
+        days ahead of each one. That numbering is still the unit structure. */
+  if(!out.length){
+    const seen = new Map();
+    for(const e of evs){
+      if(e.kind !== 'due') continue;
+      const m = e.title.match(/\bpre-?\s*exam\s*#?\s*(\d+)/i) || e.title.match(/\bexam\s*#?\s*(\d+)/i);
+      if(!m) continue;
+      const n = parseInt(m[1],10);
+      const d = icsToDate(e.at);
+      if(!seen.has(n) || d < seen.get(n).date)
+        seen.set(n, {id:'u-exam'+n, label:'Exam '+n, sub:'', order:n, date:d});
+    }
+    out.push(...[...seen.values()].sort((a,b)=>a.order-b.order));
+  }
+
+  /* 4. A course with none of the above (FIN 384 publishes nothing) still needs
+        somewhere to put files. */
+  if(!out.length) out.push({id:'u-general', label:'General', sub:'', order:1, date:null});
+
+  /* Any custom unit he typed himself, preserved so it stays selectable. */
+  const known = new Set(out.map(u=>u.label.toLowerCase()));
+  for(const m of db.materials.filter(x=>x.courseId===course.id)){
+    if(m.unit && !known.has(String(m.unit).toLowerCase())){
+      known.add(String(m.unit).toLowerCase());
+      out.push({id:'u-custom-'+m.unit, label:m.unit, sub:'', order:900, date:null, custom:true});
+    }
+  }
+  return out;
+}
+
+const unitLabel = u => u.label + (u.sub ? ' · ' + u.sub : '');
+
+/* The unit whose exam is next — what he should actually be studying. */
+function activeUnit(db, course){
+  const units = courseUnits(db, course);
+  const future = units.filter(u=>u.date && daysUntil(u.date) >= 0)
+                      .sort((a,b)=>a.date-b.date);
+  return future[0] || units[units.length-1] || null;
+}
+/* What a file IS changes how it gets taught. A study guide is the professor
+   telling you the answer key; a lecture deck is raw material. Never equal. */
+const MATERIAL_KINDS = [
+  {k:'guide',    label:'Study guide', hint:'Exam review sheet, "what to know", practice test', weight:100},
+  {k:'lecture',  label:'Lecture deck', hint:'Slides from class', weight:50},
+  {k:'notes',    label:'Notes / reading', hint:'Your notes, textbook chapter, handout', weight:35},
+  {k:'syllabus', label:'Syllabus', hint:'Course outline, grading breakdown', weight:10},
+];
+const kindMeta = k => MATERIAL_KINDS.find(x=>x.k===k) || MATERIAL_KINDS[1];
+
+
+/* ============================================================
+   TEACH — the daily lesson
+
+   Two sources, in priority order:
+   1. Lessons Claude wrote and pushed into the `school` row. Real teaching,
+      written against whatever has been uploaded and whichever exam is next.
+   2. A locally generated micro-lesson built from extracted definitions, so
+      this screen is never empty even before Claude has written anything.
+   ============================================================ */
+
+/* Local calendar day, not the UTC one. toISOString().slice(0,10) rolls over at
+   7pm Central, so an evening study session looked like it happened "tomorrow"
+   and the streak never counted it. */
+const dayKey = d => {
+  const x = new Date(d);
+  return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0')
+                         + '-' + String(x.getDate()).padStart(2,'0');
+};
+const todayKey = () => dayKey(new Date());
+
+/* Rank courses by how much teaching they need right now: an exam close by,
+   with material uploaded, and concepts still unlearned. */
+function teachPriority(db){
+  const exams = upcomingExams(db);
+  return db.courses.map(c=>{
+    const ex = exams.find(e=>e.course===c);
+    const days = ex ? Math.max(0, daysUntil(ex.date)) : 999;
+    const mats = db.materials.filter(m=>m.courseId===c.id);
+    const guides = mats.filter(m=>m.role==='guide');
+    const cards = db.cards.filter(x=>x.courseId===c.id);
+    const weak = cards.filter(x=>x.box<=2).length;
+    /* Closer exam = higher score; a study guide sitting unused is a big signal. */
+    const urgency = days>=999 ? 0 : Math.max(5, 120 - days*5);
+    return { course:c, exam:ex, days, mats, guides, cards, weak,
+             score: urgency + guides.length*25 + Math.min(40, weak) };
+  }).sort((a,b)=>b.score-a.score);
+}
+
+/* The fallback teacher. Not as good as a written lesson, but it is real
+   content from his own slides rather than a "nothing here yet" screen. */
+function autoLesson(db){
+  const ranked = teachPriority(db);
+  const top = ranked.find(r=>r.mats.length) || ranked[0];
+  if(!top || !top.mats || !top.mats.length) return null;
+  /* Prefer a study guide, then the least-recently-taught deck. */
+  const pool = top.guides.length ? top.guides : top.mats;
+  const seed = new Date().getDate();
+  const mat = pool[seed % pool.length];
+  const defs = (mat.pack.defs||[]);
+  if(!defs.length) return null;
+  const start = (seed * 3) % defs.length;
+  const picked = [];
+  for(let i=0;i<Math.min(4, defs.length);i++) picked.push(defs[(start+i) % defs.length]);
+  return {
+    id: 'auto-'+todayKey(),
+    auto: true,
+    courseId: top.course.id,
+    title: mat.name.replace(/\.(pptx|pdf|docx|txt|md)$/i,'') + ' — 4 concepts',
+    forExam: top.exam ? top.exam.title : null,
+    days: top.days<999 ? top.days : null,
+    minutes: 6,
+    intro: 'Built automatically from your own slides. Ask Claude for a real lesson set and this gets replaced by actual teaching.',
+    blocks: picked.map(d=>({ head:d.term, body:d.def })),
+    recall: picked.slice(0,3).map(d=>({ q:'What is '+d.term+'?', a:d.def })),
+  };
+}
+
+function lessonForToday(db){
+  const log = db.lessonLog || {};
+  const queue = (db.lessons||[]).filter(l=>!log[l.id]);
+  if(queue.length){
+    /* Teach the course with the nearest exam first. */
+    const rank = teachPriority(db);
+    const order = new Map(rank.map((r,i)=>[r.course.id, i]));
+    queue.sort((a,b)=>(order.get(a.courseId) ?? 99) - (order.get(b.courseId) ?? 99)
+                    || (a.seq||0) - (b.seq||0));
+    return queue[0];
+  }
+  return autoLesson(db);
+}
+
+function TeachView({db, setDb, go}){
+  const lesson = useMemo(()=>lessonForToday(db), [db.lessons, db.lessonLog, db.materials, db.cards]);
+  const [showAnswers,setShowAnswers] = useState({});
+  const [copied,copy] = useCopy();
+  const log = db.lessonLog || {};
+  const doneCount = Object.keys(log).length;
+  const remaining = (db.lessons||[]).filter(l=>!log[l.id]).length;
+  const ranked = useMemo(()=>teachPriority(db), [db]);
+  const course = lesson ? db.courses.find(c=>c.id===lesson.courseId) : null;
+
+  /* Streak: consecutive days ending today with at least one lesson finished. */
+  const streak = useMemo(()=>{
+    const days = new Set(Object.values(log).map(dayKey));
+    let n=0;
+    for(let i=0;i<400;i++){
+      const d = dayKey(new Date(startOfDay(new Date()).getTime() - i*DAY));
+      if(days.has(d)) n++; else if(i>0) break;
+    }
+    return n;
+  },[db.lessonLog]);
+
+  const finish = () => {
+    if(!lesson) return;
+    setDb(d=>({...d, lessonLog:{...(d.lessonLog||{}), [lesson.id]: new Date().toISOString()}}));
+    setShowAnswers({});
+  };
+
+  return (
+    <div className="fade-in">
+      <H sub={'Short daily teaching, aimed at whatever exam is closest'}
+         right={<div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+           <Btn ghost tone={T.accent2} onClick={()=>copy(lessonRequestPrompt(db))}>
+             {copied ? 'Copied — paste to Claude' : 'Ask Claude for more lessons'}
+           </Btn>
+         </div>}>
+        Teach me
+      </H>
+
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:11, marginBottom:20}}>
+        <Stat label="Day streak" value={streak} tone={streak>0?T.good:T.dimmer}/>
+        <Stat label="Lessons done" value={doneCount} tone={T.text}/>
+        <Stat label="Queued" value={remaining} tone={remaining?T.accent2:T.dimmer}/>
+        <Stat label="Next exam" value={ranked[0]&&ranked[0].days<999?ranked[0].days+'d':'—'}
+              tone={ranked[0]&&ranked[0].days<=7?T.bad:T.text}/>
+      </div>
+
+      {!lesson ? (
+        <Card>
+          <Empty icon="▤" title="Nothing to teach from yet"
+            sub="Upload a lecture deck or a study guide under Study Lab, then hit “Ask Claude for more lessons” and paste the result back. Once material is in, this screen fills itself every day."/>
+        </Card>
+      ) : (
+        <React.Fragment>
+          <Card style={{marginBottom:16, borderColor:(course?course.color:T.accent)+'55',
+            background:'linear-gradient(135deg,'+(course?course.color:T.accent)+'12, rgba(14,16,22,.9))'}}>
+            <div style={{display:'flex', justifyContent:'space-between', gap:14, flexWrap:'wrap', alignItems:'flex-start'}}>
+              <div style={{minWidth:0, flex:1}}>
+                <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:8}}>
+                  {course && <Pill tone={course.color}>{course.code}</Pill>}
+                  {lesson.unit && <Pill tone={T.info}>{lesson.unit}</Pill>}
+                  <Pill tone={T.dimmer}>{lesson.minutes||6} min</Pill>
+                  {lesson.auto && <Pill tone={T.warn}>auto-built</Pill>}
+                  {lesson.forExam && <Pill tone={T.bad}>{lesson.days!=null?lesson.days+'d to exam':'exam'}</Pill>}
+                </div>
+                <div style={{fontSize:20, fontWeight:800, letterSpacing:-.3}}>{lesson.title}</div>
+                {lesson.forExam && <div style={{fontSize:12, color:T.dim, marginTop:4}}>
+                  For: {lesson.forExam}</div>}
+              </div>
+            </div>
+            {lesson.intro && <div style={{fontSize:13.5, color:T.dim, marginTop:12, lineHeight:1.65}}>
+              {lesson.intro}</div>}
+          </Card>
+
+          {(lesson.blocks||[]).map((b,i)=>(
+            <Card key={i} style={{marginBottom:11}}>
+              <div style={{fontSize:15, fontWeight:750, marginBottom:7}}>
+                <span style={{color:T.dimmer, fontSize:12, marginRight:9}}>{String(i+1).padStart(2,'0')}</span>
+                {b.head}
+              </div>
+              <div style={{fontSize:14, lineHeight:1.7, color:'#cfd5e0', whiteSpace:'pre-wrap'}}>{b.body}</div>
+              {b.example && <div style={{marginTop:10, padding:'10px 13px', background:T.panel2,
+                borderLeft:'2px solid '+T.accent2, borderRadius:'0 8px 8px 0', fontSize:13, color:T.dim, lineHeight:1.65}}>
+                <strong style={{color:T.accent2}}>In practice: </strong>{b.example}</div>}
+              {b.trap && <div style={{marginTop:9, padding:'10px 13px', background:T.bad+'0f',
+                borderLeft:'2px solid '+T.bad, borderRadius:'0 8px 8px 0', fontSize:13, color:T.dim, lineHeight:1.65}}>
+                <strong style={{color:T.bad}}>Trap: </strong>{b.trap}</div>}
+            </Card>
+          ))}
+
+          {(lesson.recall||[]).length>0 && (
+            <Card style={{marginTop:18, marginBottom:14}}>
+              <div style={{fontSize:12, letterSpacing:1.2, textTransform:'uppercase', color:T.accent2,
+                fontWeight:800, marginBottom:12}}>Prove you got it</div>
+              <div style={{display:'grid', gap:10}}>
+                {lesson.recall.map((r,i)=>(
+                  <div key={i} style={{background:T.panel2, border:'1px solid '+T.line,
+                    borderRadius:10, padding:'12px 14px'}}>
+                    <div style={{fontSize:13.5, fontWeight:600, marginBottom:showAnswers[i]?9:0}}>{r.q}</div>
+                    {showAnswers[i]
+                      ? <div className="scale-in" style={{fontSize:13, color:T.good, lineHeight:1.65,
+                          paddingTop:9, borderTop:'1px solid '+T.line}}>{r.a}</div>
+                      : <button onClick={()=>setShowAnswers(s=>({...s,[i]:true}))}
+                          style={{fontSize:12, color:T.dim, marginTop:7}}>answer it out loud, then tap to check</button>}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          <div style={{display:'flex', gap:10, flexWrap:'wrap', marginTop:6}}>
+            <Btn onClick={finish} style={{minWidth:170}}>Done — next lesson</Btn>
+            {course && <Btn ghost tone={T.line} onClick={()=>go({view:'course', courseId:course.id})}>
+              Open {course.code}</Btn>}
+            {db.cards.filter(cardDue).length>0 &&
+              <Btn ghost tone={T.accent2} onClick={()=>go({view:'review'})}>
+                Drill {db.cards.filter(cardDue).length} cards</Btn>}
+          </div>
+        </React.Fragment>
+      )}
+
+      <div style={{marginTop:30}}>
+        <div style={{fontSize:12, letterSpacing:1, textTransform:'uppercase', color:T.dim,
+          fontWeight:700, marginBottom:11}}>Where you stand</div>
+        <div style={{display:'grid', gap:8}}>
+          {ranked.map(r=>(
+            <div key={r.course.id} style={{display:'flex', alignItems:'center', gap:11,
+              background:T.panel, border:'1px solid '+T.line, borderRadius:10, padding:'11px 13px'}}>
+              <div style={{width:3, height:24, background:r.course.color, borderRadius:2}}/>
+              <div style={{flex:1, minWidth:0}}>
+                <div style={{fontSize:13, fontWeight:650}}>{r.course.code}</div>
+                <div style={{fontSize:11, color:T.dim, marginTop:2}}>
+                  {r.mats.length} file{r.mats.length===1?'':'s'}
+                  {r.guides.length>0 && ' · '+r.guides.length+' study guide'+(r.guides.length===1?'':'s')}
+                  {r.cards.length>0 && ' · '+r.weak+' of '+r.cards.length+' cards still shaky'}
+                  {r.mats.length===0 && ' — nothing uploaded, so I cannot teach this one'}
+                </div>
+              </div>
+              {r.days<999 && <Pill tone={r.days<=7?T.bad:r.days<=21?T.warn:T.dimmer}>{r.days}d</Pill>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* The prompt that turns Claude into the teacher. It carries the real source
+   text, so the lessons come from his slides rather than generic knowledge. */
+function lessonRequestPrompt(db){
+  const ranked = teachPriority(db).filter(r=>r.mats.length).slice(0,2);
+  const done = new Set(Object.keys(db.lessonLog||{}));
+  const taught = (db.lessons||[]).filter(l=>done.has(l.id)).map(l=>l.title);
+  const parts = [
+    'You are my teacher for this semester. I do not pay attention in class, so what you write here is where I actually learn the material. Assume zero prior exposure.',
+    '',
+    'Write me the next 5 daily lessons. Each one is 5-8 minutes of reading, and it has to be enough on its own that I could answer exam questions on it.',
+    '',
+    'Return ONLY a JSON array, no prose around it, in exactly this shape:',
+    '[{"id":"unique-string","courseId":"<course id from below>","unit":"<unit label from below>","seq":1,"title":"...",',
+    '  "forExam":"<exam name or null>","days":<int or null>,"minutes":6,',
+    '  "intro":"one sentence on why this matters for the exam",',
+    '  "blocks":[{"head":"concept","body":"the actual teaching, plain English, 3-6 sentences",',
+    '             "example":"a concrete example, ideally from running a small business",',
+    '             "trap":"what students get wrong here"}],',
+    '  "recall":[{"q":"question","a":"answer"}]}]',
+    '',
+    'Rules: 3-5 blocks per lesson. Cover the highest-yield material first - what is most likely to be ON THE TEST, not what is most interesting. Do not pad. If the source material includes a study guide, treat it as the answer key and build everything around it.',
+    '',
+  ];
+  if(taught.length) parts.push('Already taught (do not repeat): ' + taught.join(' | '), '');
+  for(const r of ranked){
+    const active = activeUnit(db, r.course);
+    parts.push('=== COURSE: ' + r.course.code + ' - ' + r.course.name + ' ===');
+    parts.push('courseId: ' + r.course.id);
+    if(r.exam) parts.push('Next exam: ' + r.exam.title + ' in ' + r.days + ' days ('
+      + fmtDate(r.exam.date,{weekday:'long',month:'long',day:'numeric'}) + ')');
+    if(active) parts.push('UNIT BEING TESTED NEXT: ' + unitLabel(active)
+      + ' — teach this unit first and set "unit" on those lessons to "' + active.label + '".');
+
+    /* Material for the unit under test gets the most room; the rest is context
+       so lessons can reference what came before without re-teaching it. */
+    const inUnit  = r.mats.filter(m => active && m.unit === active.label);
+    const outUnit = r.mats.filter(m => !(active && m.unit === active.label));
+    const emit = (list, cap) => {
+      const budget = Math.floor(cap / Math.max(1, list.length));
+      /* Study guides first and least truncated - highest-signal input there is. */
+      const ordered = [...list].sort((a,b)=>kindMeta(b.role).weight - kindMeta(a.role).weight);
+      for(const m of ordered){
+        parts.push('');
+        parts.push('--- [' + (m.unit||'Unfiled') + '] ' + kindMeta(m.role).label.toUpperCase()
+                   + ': ' + m.name + ' ---');
+        parts.push((m.text||'').slice(0, m.role==='guide' ? Math.max(budget, 20000) : budget));
+      }
+    };
+    if(inUnit.length){
+      parts.push('', '### MATERIAL FOR THE UNIT UNDER TEST');
+      emit(inUnit, 24000);
+    }
+    if(outUnit.length){
+      parts.push('', '### OTHER UNITS (background only)');
+      emit(outUnit, inUnit.length ? 6000 : 24000);
+    }
+    parts.push('');
+  }
+  return parts.join('\n');
+}
+
+/* Paste-back: accepts the JSON array Claude returns and queues the lessons. */
+function LessonImport({db, setDb}){
+  const [raw,setRaw] = useState('');
+  const [msg,setMsg] = useState('');
+  const load = () => {
+    setMsg('');
+    try{
+      /* Tolerate a fenced code block or stray prose around the array. */
+      let t = raw.trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+      const s = t.indexOf('['), e = t.lastIndexOf(']');
+      if(s>-1 && e>s) t = t.slice(s, e+1);
+      const arr = JSON.parse(t);
+      if(!Array.isArray(arr) || !arr.length) throw new Error('that is not a lesson array');
+      const valid = arr.filter(l=>l && l.title && Array.isArray(l.blocks) && l.blocks.length);
+      if(!valid.length) throw new Error('no lesson in there had a title and blocks');
+      const known = new Set(db.courses.map(c=>c.id));
+      const clean = valid.map((l,i)=>({
+        ...l,
+        id: String(l.id || ('lesson-'+Date.now()+'-'+i)),
+        courseId: known.has(l.courseId) ? l.courseId : db.courses[0].id,
+        seq: l.seq || i+1,
+        minutes: l.minutes || 6,
+      }));
+      setDb(d=>{
+        const have = new Set((d.lessons||[]).map(l=>l.id));
+        const add = clean.filter(l=>!have.has(l.id));
+        return {...d, lessons:[...(d.lessons||[]), ...add]};
+      });
+      setMsg('Queued ' + clean.length + ' lesson' + (clean.length===1?'':'s') + '. Open Teach me.');
+      setRaw('');
+    }catch(e){ setMsg('Could not read that: ' + e.message); }
+  };
+  return (
+    <div>
+      <textarea rows={5} value={raw} onChange={e=>setRaw(e.target.value)}
+        placeholder='Paste the JSON array Claude gave you...' style={{fontSize:12}} className="mono"/>
+      <div style={{display:'flex', gap:9, marginTop:10, flexWrap:'wrap', alignItems:'center'}}>
+        <Btn onClick={load} disabled={!raw.trim()}>Load lessons</Btn>
+        {(db.lessons||[]).length>0 && <Btn ghost tone={T.bad} onClick={()=>{
+          if(window.confirm && !window.confirm('Clear all queued lessons and the completion log?')) return;
+          setDb(d=>({...d, lessons:[], lessonLog:{}}));
+          setMsg('Cleared.');
+        }}>Clear all lessons</Btn>}
+        <span style={{fontSize:12, color:T.dim}}>{(db.lessons||[]).length} in library</span>
+      </div>
+      {msg && <div style={{fontSize:12.5, color:T.accent2, marginTop:10, lineHeight:1.6}}>{msg}</div>}
+    </div>
+  );
+}
+/* ============================================================
+   STUDY LAB — drop a deck, get something to study
+   ============================================================ */
+function MaterialList({db, setDb, courseId, go}){
+  const [busy,setBusy] = useState(null);
+  const [err,setErr]   = useState('');
+  const [drag,setDrag] = useState(false);
+  /* Filing has to be explicit. The old default silently dumped every global
+     upload into whichever course happened to be first in the list. */
+  const [pickCourse,setPickCourse] = useState(courseId || '');
+  const [pickKind,setPickKind]     = useState('lecture');
+  const [pickUnit,setPickUnit]     = useState('');
+  const [newUnit,setNewUnit]       = useState('');
+  const inputRef = useRef(null);
+  const mats = db.materials.filter(m => !courseId || m.courseId===courseId);
+  const target = courseId || pickCourse;
+  const targetCourse = db.courses.find(c=>c.id===target);
+  const units = useMemo(()=> targetCourse ? courseUnits(db, targetCourse) : [], [target, db.materials, db.events]);
+
+  /* Default to the unit whose exam is next — that is almost always what he is
+     uploading for, and it saves a click on the common path. */
+  useEffect(()=>{
+    if(!targetCourse){ setPickUnit(''); return; }
+    const a = activeUnit(db, targetCourse);
+    setPickUnit(a ? a.label : '');
+  },[target]);
+
+  const unitValue = pickUnit === '__new__' ? newUnit.trim() : pickUnit;
+
+  const ingest = async (files) => {
+    setErr('');
+    if(!target){ setErr('Pick which class this belongs to first.'); return; }
+    if(!unitValue){ setErr('Give it a unit so it files somewhere you can find it.'); return; }
+    for(const f of Array.from(files)){
+      setBusy(f.name);
+      try{
+        const ex = await extractFile(f);
+        if(!ex.text || ex.text.trim().length < 40)
+          throw new Error('Almost no text came out of this file. If it is a scanned PDF or an image-only deck, there is nothing to extract.');
+        const mid = uid();
+        const pack = buildStudyPack(ex, target, mid);
+        const mat = { id:mid, courseId:target, name:f.name, fileKind:ex.kind, role:pickKind,
+                      unit:unitValue,
+                      addedAt:new Date().toISOString(), text:ex.text.slice(0,400000),
+                      slides:ex.slides.slice(0,300),
+                      pack:{ terms:pack.terms, defs:pack.defs, sections:pack.sections,
+                             shape:pack.shape, stats:pack.stats } };
+        setDb(d => ({...d, materials:[mat, ...d.materials], cards:[...pack.cards, ...d.cards]}));
+      }catch(e){ setErr(f.name+': '+e.message); }
+      setBusy(null);
+    }
+  };
+  const onDrop = e => {
+    e.preventDefault(); setDrag(false);
+    if(e.dataTransfer.files.length) ingest(e.dataTransfer.files);
+  };
+
+  return (
+    <div>
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',
+        gap:10, marginBottom:12}}>
+        {!courseId && (
+          <div>
+            <div style={{fontSize:11, color:T.dim, marginBottom:5, letterSpacing:.5,
+              textTransform:'uppercase', fontWeight:700}}>Class</div>
+            <select value={pickCourse} onChange={e=>setPickCourse(e.target.value)}
+              style={{borderColor: pickCourse ? T.line : T.warn+'88'}}>
+              <option value="">— pick a class —</option>
+              {db.courses.map(c=><option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
+            </select>
+          </div>
+        )}
+        <div>
+          <div style={{fontSize:11, color:T.dim, marginBottom:5, letterSpacing:.5,
+            textTransform:'uppercase', fontWeight:700}}>Unit</div>
+          <select value={pickUnit} onChange={e=>setPickUnit(e.target.value)} disabled={!target}
+            style={{borderColor: unitValue ? T.line : T.warn+'88'}}>
+            {!target && <option value="">pick a class first</option>}
+            {units.map(u=>(
+              <option key={u.id} value={u.label}>
+                {unitLabel(u)}{u.date ? '  ·  '+fmtDate(u.date,{month:'short',day:'numeric'}) : ''}
+              </option>
+            ))}
+            {target && <option value="__new__">+ new unit…</option>}
+          </select>
+          {pickUnit==='__new__' && (
+            <input autoFocus value={newUnit} onChange={e=>setNewUnit(e.target.value)}
+              placeholder="e.g. Week 5, Midterm, Ch 12" style={{marginTop:6, fontSize:13}}/>
+          )}
+          {pickUnit!=='__new__' && targetCourse && (
+            <div style={{fontSize:11, color:T.dimmer, marginTop:5}}>
+              Pulled from {targetCourse.code}&rsquo;s own schedule
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div style={{fontSize:11, color:T.dim, marginBottom:5, letterSpacing:.5,
+            textTransform:'uppercase', fontWeight:700}}>What is it</div>
+          <select value={pickKind} onChange={e=>setPickKind(e.target.value)}>
+            {MATERIAL_KINDS.map(k=><option key={k.k} value={k.k}>{k.label}</option>)}
+          </select>
+          <div style={{fontSize:11, color:T.dimmer, marginTop:5}}>{kindMeta(pickKind).hint}</div>
+        </div>
+      </div>
+
+      <div onDragOver={e=>{e.preventDefault(); setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={onDrop}
+        onClick={()=>{ if(!target){ setErr('Pick which class this belongs to first.'); return; }
+                       inputRef.current && inputRef.current.click(); }}
+        style={{border:'1.5px dashed '+(drag?T.accent:target?T.line:T.warn+'55'), borderRadius:14, padding:'30px 20px',
+          textAlign:'center', cursor:'pointer', background:drag?T.accent+'0d':T.panel, transition:'all .15s', marginBottom:18}}>
+        <input ref={inputRef} type="file" multiple hidden accept=".pptx,.pdf,.docx,.txt,.md"
+          onChange={e=>{ ingest(e.target.files); e.target.value=''; }}/>
+        {busy ? (
+          <div>
+            <div className="spin" style={{width:22,height:22,border:'2px solid '+T.line,borderTopColor:T.accent,
+              borderRadius:'50%',margin:'0 auto 12px'}}/>
+            <div style={{fontSize:13.5, color:T.dim}}>Reading {busy}…</div>
+          </div>
+        ) : (
+          <div>
+            <div style={{fontSize:26, marginBottom:9, opacity:.6}}>&#8681;</div>
+            <div style={{fontSize:14.5, fontWeight:650}}>Drop a PowerPoint, PDF, or Word doc</div>
+            <div style={{fontSize:12, color:T.dim, marginTop:6, lineHeight:1.6}}>
+              It gets read on this device, turned into notes + flashcards, and told you how to study it.<br/>
+              .pptx · .pdf · .docx · .txt — nothing is uploaded anywhere.
+            </div>
+          </div>
+        )}
+      </div>
+      {err && <Card style={{marginBottom:16, borderColor:T.bad+'55', background:T.bad+'0d'}}>
+        <div style={{fontSize:13, color:T.bad}}>{err}</div></Card>}
+
+      {mats.length ? <MaterialGroups db={db} mats={mats} go={go}/>
+        : <Empty icon="▤" title="No material yet"
+            sub="Download the slides from Brightspace and drop them here. You get an outline, key terms, flashcards, and a study method picked for that specific deck."/>}
+    </div>
+  );
+}
+
+
+/* Materials grouped course → unit, in the order the semester actually runs.
+   A flat pile stops being usable around the fifth upload. */
+function MaterialGroups({db, mats, go}){
+  const groups = useMemo(()=>{
+    const byCourse = new Map();
+    for(const m of mats){
+      if(!byCourse.has(m.courseId)) byCourse.set(m.courseId, new Map());
+      const key = m.unit || 'Unfiled';
+      const u = byCourse.get(m.courseId);
+      if(!u.has(key)) u.set(key, []);
+      u.get(key).push(m);
+    }
+    const out = [];
+    for(const [cid, unitMap] of byCourse){
+      const course = db.courses.find(c=>c.id===cid);
+      if(!course) continue;
+      const order = new Map(courseUnits(db, course).map((u,i)=>[u.label, i]));
+      const units = [...unitMap.entries()]
+        .map(([label, items])=>({ label, items,
+          i: order.has(label) ? order.get(label) : 998,
+          /* Surface the unit being examined next, wherever it sits in order. */
+          active: (activeUnit(db, course)||{}).label === label }))
+        .sort((a,b)=>a.i-b.i);
+      out.push({ course, units });
+    }
+    return out.sort((a,b)=>{
+      const ea = activeUnit(db,a.course), eb = activeUnit(db,b.course);
+      const da = ea && ea.date ? daysUntil(ea.date) : 9999;
+      const dbb = eb && eb.date ? daysUntil(eb.date) : 9999;
+      return da - dbb;
+    });
+  },[mats, db.events, db.courses]);
+
+  return (
+    <div style={{display:'grid', gap:22}}>
+      {groups.map(g=>(
+        <div key={g.course.id}>
+          <div style={{display:'flex', alignItems:'center', gap:9, marginBottom:11}}>
+            <div style={{width:3, height:18, background:g.course.color, borderRadius:2}}/>
+            <div style={{fontSize:13, fontWeight:800, color:g.course.color}}>{g.course.code}</div>
+            <div style={{fontSize:11.5, color:T.dimmer}}>{g.course.name}</div>
+          </div>
+          <div style={{display:'grid', gap:14}}>
+            {g.units.map(u=>(
+              <div key={u.label}>
+                <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:8,
+                  paddingLeft:2}}>
+                  <span style={{fontSize:11.5, fontWeight:800, letterSpacing:.7,
+                    textTransform:'uppercase', color: u.active ? T.accent2 : T.dim}}>{u.label}</span>
+                  {u.active && <Pill tone={T.accent2}>studying now</Pill>}
+                  <span style={{fontSize:11, color:T.dimmer}}>
+                    {u.items.length} file{u.items.length===1?'':'s'}
+                  </span>
+                </div>
+                <div style={{display:'grid', gap:9, paddingLeft:12,
+                  borderLeft:'1px solid '+(u.active ? T.accent2+'44' : T.line)}}>
+                  {u.items.map(m=>(
+                    <Card key={m.id} style={{cursor:'pointer', padding:13}}
+                      onClick={()=>go({view:'material', materialId:m.id})}>
+                      <div style={{display:'flex', justifyContent:'space-between', gap:14, alignItems:'flex-start'}}>
+                        <div style={{minWidth:0, flex:1}}>
+                          <div style={{fontSize:13.5, fontWeight:650}} className="clamp2">{m.name}</div>
+                          <div style={{fontSize:11.5, color:T.dim, marginTop:5, display:'flex', gap:9, flexWrap:'wrap'}}>
+                            <span>{m.pack.stats.slides ? m.pack.stats.slides+' slides' : m.pack.stats.words+' words'}</span>
+                            <span>{db.cards.filter(x=>x.materialId===m.id).length} cards</span>
+                            <span>{new Date(m.addedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
+                          </div>
+                        </div>
+                        <div style={{display:'flex', flexDirection:'column', gap:5, alignItems:'flex-end'}}>
+                          {m.role==='guide' && <Pill tone={T.bad}>Study guide</Pill>}
+                          <Pill tone={T.dimmer}>{kindMeta(m.role).label}</Pill>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+function MaterialView({db, setDb, materialId, go}){
+  const m = db.materials.find(x=>x.id===materialId);
+  const [tab,setTab] = useState('study');
+  const [copied,copy] = useCopy();
+  if(!m) return <Empty icon="?" title="That material is gone"/>;
+  const course = db.courses.find(c=>c.id===m.courseId);
+  const cards = db.cards.filter(c=>c.materialId===m.id);
+  const due = cards.filter(cardDue).length;
+  const del = () => {
+    /* This used to delete on the first click whenever confirm() existed — the
+       guard was backwards. Deleting a deck also destroys its card progress. */
+    const n = db.cards.filter(c=>c.materialId===m.id).length;
+    if(window.confirm && !window.confirm('Delete "'+m.name+'" and its '+n+' cards? This cannot be undone.')) return;
+    setDb(d=>({...d, materials:d.materials.filter(x=>x.id!==m.id), cards:d.cards.filter(c=>c.materialId!==m.id)}));
+    go({view:'lab'});
+  };
+
+  return (
+    <div className="fade-in">
+      <H sub={(course?course.code+' · ':'') + (m.unit?m.unit+' · ':'') + kindMeta(m.role).label + ' · ' +
+              (m.pack.stats.slides?m.pack.stats.slides+' slides · ':'') +
+              m.pack.stats.words+' words · '+cards.length+' cards'}
+        right={<div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          {cards.length>0 && <Btn onClick={()=>go({view:'review', materialId:m.id})}>Study {due||cards.length} cards</Btn>}
+          <Btn ghost tone={T.accent2} onClick={()=>copy(teachPrompt(m, course))}>
+            {copied?'Copied':'Copy “teach me this”'}
+          </Btn>
+        </div>}>
+        {m.name.replace(/\.(pptx|pdf|docx|txt|md)$/i,'')}
+      </H>
+
+      <Card style={{marginBottom:14}}>
+        <div style={{fontSize:11, letterSpacing:1, textTransform:'uppercase', color:T.dim,
+          fontWeight:700, marginBottom:10}}>Filed under</div>
+        <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))', gap:10}}>
+          <select value={m.courseId}
+            onChange={e=>setDb(d=>({...d,
+              materials:d.materials.map(x=>x.id===m.id?{...x, courseId:e.target.value, unit:''}:x),
+              cards:d.cards.map(c=>c.materialId===m.id?{...c, courseId:e.target.value}:c)}))}>
+            {db.courses.map(c=><option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
+          </select>
+          <select value={m.unit||''}
+            onChange={e=>setDb(d=>({...d, materials:d.materials.map(x=>x.id===m.id?{...x, unit:e.target.value}:x)}))}>
+            <option value="">— no unit —</option>
+            {course && courseUnits(db, course).map(u=>(
+              <option key={u.id} value={u.label}>{unitLabel(u)}</option>
+            ))}
+          </select>
+          <select value={m.role||'lecture'}
+            onChange={e=>setDb(d=>({...d, materials:d.materials.map(x=>x.id===m.id?{...x, role:e.target.value}:x)}))}>
+            {MATERIAL_KINDS.map(k=><option key={k.k} value={k.k}>{k.label}</option>)}
+          </select>
+        </div>
+        {!m.unit && <div style={{fontSize:11.5, color:T.warn, marginTop:9}}>
+          No unit set — give it one so it files with the rest of that unit&rsquo;s material.
+        </div>}
+      </Card>
+
+      <Card style={{marginBottom:18, borderColor:T.accent2+'44', background:T.accent2+'0a'}}>
+        <div style={{display:'flex', gap:10, alignItems:'center', marginBottom:9}}>
+          <Pill tone={T.accent2}>Fastest way to study this</Pill>
+          <span style={{fontSize:15, fontWeight:700}}>{m.pack.shape.label}</span>
+        </div>
+        <div style={{fontSize:13, color:T.dim, lineHeight:1.65, marginBottom:11}}>{m.pack.shape.why}</div>
+        <ol style={{margin:0, paddingLeft:19, display:'grid', gap:6}}>
+          {m.pack.shape.how.map((h,i)=><li key={i} style={{fontSize:13, lineHeight:1.6}}>{h}</li>)}
+        </ol>
+      </Card>
+
+      <div style={{display:'flex', gap:6, marginBottom:16, flexWrap:'wrap'}}>
+        {[['study','Notes'],['terms','Key terms '+m.pack.terms.length],
+          ['defs','Definitions '+m.pack.defs.length],['cards','Cards '+cards.length],['raw','Raw text']].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)}
+            style={{padding:'7px 13px', borderRadius:9, fontSize:12.5, fontWeight:600,
+              background: tab===k?T.accent+'22':'transparent', color: tab===k?T.accent:T.dim,
+              border:'1px solid '+(tab===k?T.accent+'55':T.line)}}>{l}</button>
+        ))}
+      </div>
+
+      {tab==='study' && <div style={{display:'grid', gap:10}}>
+        {m.pack.sections.map((s,i)=>(
+          <Card key={i} style={{padding:14}}>
+            <div style={{fontSize:13.5, fontWeight:700, marginBottom:(s.points||[]).length?8:0}}>
+              <span style={{color:T.dimmer, marginRight:8, fontSize:11}}>{String(i+1).padStart(2,'0')}</span>{s.head}
+            </div>
+            {(s.points||[]).length>0 && <ul style={{margin:0, paddingLeft:18, display:'grid', gap:5}}>
+              {s.points.map((p,j)=><li key={j} style={{fontSize:12.5, color:T.dim, lineHeight:1.6}}>{p}</li>)}
+            </ul>}
+          </Card>
+        ))}
+      </div>}
+
+      {tab==='terms' && <div style={{display:'flex', flexWrap:'wrap', gap:8}}>
+        {m.pack.terms.map((t,i)=>(
+          <div key={i} style={{background:T.panel2, border:'1px solid '+T.line, borderRadius:9,
+            padding:'8px 12px', fontSize:13}}>
+            {t.term} <span style={{color:T.dimmer, fontSize:11, marginLeft:5}}>×{t.n}</span>
+          </div>
+        ))}
+      </div>}
+
+      {tab==='defs' && (m.pack.defs.length ? <div style={{display:'grid', gap:9}}>
+        {m.pack.defs.map((d,i)=>(
+          <Card key={i} style={{padding:13}}>
+            <div style={{fontSize:13.5, fontWeight:700, color:T.accent}}>{d.term}</div>
+            <div style={{fontSize:12.5, color:T.dim, marginTop:5, lineHeight:1.6}}>{d.def}</div>
+          </Card>
+        ))}
+      </div> : <Empty icon="○" title="No clean definitions found"
+        sub="This deck does not use definition sentences. The flashcards fall back to fill-in-the-blank from the real slide text."/>)}
+
+      {tab==='cards' && <div style={{display:'grid', gap:8}}>
+        {cards.map(c=>(
+          <div key={c.id} style={{background:T.panel2, border:'1px solid '+T.line, borderRadius:10, padding:'11px 13px'}}>
+            <div style={{fontSize:13, fontWeight:600}}>{c.front}</div>
+            <div style={{fontSize:12, color:T.dim, marginTop:5}}>{c.back}</div>
+          </div>
+        ))}
+      </div>}
+
+      {tab==='raw' && <Card><pre style={{whiteSpace:'pre-wrap', fontSize:12, color:T.dim,
+        lineHeight:1.65, fontFamily:'inherit', maxHeight:'62vh', overflow:'auto'}}>{m.text}</pre></Card>}
+
+      <div style={{marginTop:26, paddingTop:16, borderTop:'1px solid '+T.line}}>
+        <Btn ghost tone={T.bad} onClick={del}>Delete this material and its cards</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   REVIEW — active recall, Leitner boxes
+   ============================================================ */
+function ReviewView({db, setDb, filter, go}){
+  const pool = useMemo(()=>{
+    let cs = db.cards;
+    if(filter.courseId)   cs = cs.filter(c=>c.courseId===filter.courseId);
+    if(filter.materialId) cs = cs.filter(c=>c.materialId===filter.materialId);
+    const dueOnes = cs.filter(cardDue);
+    const use = dueOnes.length ? dueOnes : cs;
+    return use.slice().sort(()=>Math.random()-0.5).slice(0,40);
+  }, [filter.courseId, filter.materialId]);
+
+  const [i,setI] = useState(0);
+  const [show,setShow] = useState(false);
+  const [tally,setTally] = useState({right:0, wrong:0});
+  const card = pool[i];
+
+  const answer = (correct) => {
+    setDb(d=>({...d, cards:d.cards.map(c=>c.id===card.id?gradeCard(c,correct):c)}));
+    setTally(t=>({right:t.right+(correct?1:0), wrong:t.wrong+(correct?0:1)}));
+    setShow(false); setI(x=>x+1);
+  };
+  useEffect(()=>{
+    const k = e => {
+      if(!card) return;
+      if(e.code==='Space'){ e.preventDefault(); setShow(s=>!s); }
+      if(show && (e.key==='1'||e.key==='ArrowLeft'))  answer(false);
+      if(show && (e.key==='2'||e.key==='ArrowRight')) answer(true);
+    };
+    window.addEventListener('keydown',k); return ()=>window.removeEventListener('keydown',k);
+  },[card,show]);
+
+  if(!pool.length) return (
+    <div className="fade-in"><H>Review</H>
+      <Card><Empty icon="◆" title="No cards to review"
+        sub="Upload a deck in the Study Lab and cards build themselves."/></Card></div>
+  );
+  if(!card) return (
+    <div className="fade-in"><H>Session done</H>
+      <Card style={{textAlign:'center', padding:'40px 20px'}}>
+        <div style={{fontSize:46, fontWeight:900, color:T.good}}>{tally.right}/{tally.right+tally.wrong}</div>
+        <div style={{color:T.dim, fontSize:13.5, marginTop:8, lineHeight:1.6}}>
+          Missed cards come back tomorrow. The ones you got right move out to 3, 7, then 21 days.
+        </div>
+        <div style={{marginTop:18, display:'flex', gap:9, justifyContent:'center', flexWrap:'wrap'}}>
+          <Btn onClick={()=>{setI(0); setTally({right:0,wrong:0});}}>Go again</Btn>
+          <Btn ghost tone={T.line} onClick={()=>go({view:'today'})}>Back to Today</Btn>
+        </div>
+      </Card></div>
+  );
+
+  return (
+    <div className="fade-in">
+      <H sub={(i+1)+' of '+pool.length+'  ·  space to flip, then 1 = missed / 2 = got it'}>Review</H>
+      <div style={{height:3, background:T.line, borderRadius:2, marginBottom:20, overflow:'hidden'}}>
+        <div style={{height:'100%', width:((i/pool.length)*100)+'%', background:T.accent, transition:'width .25s'}}/>
+      </div>
+      <Card style={{minHeight:250, display:'flex', flexDirection:'column', justifyContent:'center',
+        padding:'34px 26px', cursor:'pointer'}} onClick={()=>setShow(s=>!s)}>
+        <div style={{textAlign:'center'}}>
+          <Pill tone={T.dimmer}>{card.kind}</Pill>
+          <div style={{fontSize:19, fontWeight:650, marginTop:16, lineHeight:1.55}}>{card.front}</div>
+          {show && <div className="scale-in" style={{marginTop:22, paddingTop:20, borderTop:'1px solid '+T.line,
+            fontSize:15.5, color:T.accent2, lineHeight:1.6}}>{card.back}</div>}
+          {!show && <div style={{marginTop:22, fontSize:12, color:T.dimmer}}>click or press space to reveal</div>}
+        </div>
+      </Card>
+      {show && (
+        <div style={{display:'flex', gap:10, marginTop:14, justifyContent:'center'}}>
+          <Btn tone={T.bad} onClick={()=>answer(false)} style={{minWidth:150}}>Missed it</Btn>
+          <Btn tone={T.good} onClick={()=>answer(true)} style={{minWidth:150}}>Got it</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   EXAMS
+   ============================================================ */
+function ExamsView({db}){
+  const exams = useMemo(()=>upcomingExams(db), [db]);
+  return (
+    <div className="fade-in">
+      <H sub="Every exam left this semester, with a prep plan that works backwards from the date">Exams</H>
+      {exams.length ? <div style={{display:'grid', gap:12}}>
+        {exams.map(e=>(
+          <ExamCard key={e.uid} exam={e} db={db}
+            mats={db.materials.filter(m=>e.course && m.courseId===e.course.id)}/>
+        ))}
+      </div> : <Card><Empty icon="⚑" title="No exams found"
+        sub="Nothing in the Brightspace feed is tagged as an exam. Sync the feed in Settings, or the exam may not be posted yet."/></Card>}
+    </div>
+  );
+}
+
+/* ============================================================
+   SCHEDULE — an actual week, not a wall of deadlines
+   ============================================================ */
+const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+/* Allocate study blocks over the next 7 days. Rules that come from how
+   Habib actually operates: Saturdays are Matrix jobs, two blocks a day
+   is the ceiling, and the thing due soonest gets the earlier block. */
+function buildWeek(db){
+  const items = triage(db, 21);
+  const exams = upcomingExams(db);
+  const days = [];
+  for(let k=0;k<7;k++){
+    const date = new Date(startOfDay(new Date()).getTime() + k*DAY);
+    const dow = date.getDay();
+    const busy = (db.schedule.busy||[]).filter(b=>b.days.includes(dow));
+    const capacity = dow===SAT ? 0 : dow===0 ? 2 : 2;
+    days.push({date, dow, busy, capacity, blocks:[], due:[]});
+  }
+  /* Deadlines land on their own day so he sees the wall coming. */
+  for(const it of items){
+    const k = it.days;
+    if(k>=0 && k<7) days[k].due.push(it);
+  }
+  /* Exam prep sessions are placed first — they are the non-negotiable ones.
+     MKT posts four chapter tests on one date; that is one study track, not
+     four, so collapse exams sharing a course and a day before planning. */
+  const tracks = [];
+  for(const ex of exams){
+    const key = (ex.course?ex.course.id:'?') + '|' + ex.at.slice(0,8);
+    const hit = tracks.find(t=>t.key===key);
+    if(hit){ hit.titles.push(ex.title); continue; }
+    tracks.push({key, ex, titles:[ex.title]});
+  }
+  for(const tr of tracks.slice(0,3)){
+    const ex = tr.ex;
+    const label = tr.titles.length>1 ? tr.titles.length+' tests' : ex.title;
+    for(const p of prepPlan(ex, db)){
+      const k = Math.round((startOfDay(p.date) - startOfDay(new Date()))/DAY);
+      if(k<0 || k>6) continue;
+      const d = days[k];
+      const title = (ex.course?ex.course.code:'Exam')+' — '+p.label;
+      if(d.blocks.length >= d.capacity || d.blocks.some(b=>b.title===title)) continue;
+      d.blocks.push({ kind:'exam', minutes:p.minutes, title,
+        detail:p.what+' ('+label+')', color: ex.course?ex.course.color:T.bad });
+    }
+  }
+  /* Then fill leftover capacity with the highest-scoring work, scheduled
+     one to two days ahead of its deadline rather than on the due date. */
+  for(const it of items){
+    if(it.type==='exam') continue;
+    const target = clamp(it.days - 1, 0, 6);
+    for(let k=target;k<7;k++){
+      const d = days[k];
+      if(d.blocks.length >= d.capacity) continue;
+      if(d.blocks.some(b=>b.ref===it.ev.uid)) break;
+      d.blocks.push({ kind:'work', ref:it.ev.uid, minutes:45,
+        title:(it.course?it.course.code:'')+' — '+it.ev.title,
+        detail:'Due '+fmtDate(it.date)+'. '+TYPE_META[it.type].label+'.',
+        color: it.course?it.course.color:T.dim });
+      break;
+    }
+  }
+  return days;
+}
+
+function ScheduleView({db, setDb}){
+  const week = useMemo(()=>buildWeek(db), [db]);
+  const [editing,setEditing] = useState(false);
+  const inPerson = db.courses.filter(c=>c.mode==='in-person');
+  const online   = db.courses.filter(c=>c.mode!=='in-person');
+  const totalMin = week.reduce((s,d)=>s+d.blocks.reduce((x,b)=>x+b.minutes,0),0);
+
+  return (
+    <div className="fade-in">
+      <H sub={'Next 7 days · '+Math.round(totalMin/60*10)/10+' hours of study placed around your actual week'}
+         right={<Btn ghost tone={T.line} onClick={()=>setEditing(!editing)}>{editing?'Done':'Edit class times'}</Btn>}>
+        Schedule
+      </H>
+
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(230px,1fr))', gap:11, marginBottom:22}}>
+        {week.map((d,i)=>(
+          <Card key={i} style={{padding:13, opacity:d.dow===SAT?.65:1,
+            borderColor: i===0 ? T.accent+'55' : T.line}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:10}}>
+              <div style={{fontSize:12.5, fontWeight:800, letterSpacing:.6, textTransform:'uppercase',
+                color:i===0?T.accent:T.dim}}>
+                {i===0?'Today':DAY_NAMES[d.dow]}
+              </div>
+              <div style={{fontSize:11, color:T.dimmer}}>
+                {d.date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
+            </div>
+
+            {d.due.length>0 && <div style={{marginBottom:9}}>
+              {d.due.slice(0,4).map((it,j)=>(
+                <div key={j} style={{fontSize:11, color:T.bad, display:'flex', gap:6, marginBottom:3}}>
+                  <span>▸</span><span className="clamp2">{it.course?it.course.code:''} {it.ev.title} due</span>
+                </div>
+              ))}
+              {d.due.length>4 && <div style={{fontSize:11, color:T.dimmer}}>+{d.due.length-4} more due</div>}
+            </div>}
+
+            {d.dow===SAT ? (
+              <div style={{fontSize:11.5, color:T.dimmer, lineHeight:1.55, fontStyle:'italic'}}>
+                Matrix day — no study scheduled.
+              </div>
+            ) : d.blocks.length ? (
+              <div style={{display:'grid', gap:7}}>
+                {d.blocks.map((b,j)=>(
+                  <div key={j} style={{borderLeft:'2px solid '+b.color, paddingLeft:9}}>
+                    <div style={{fontSize:12, fontWeight:650, lineHeight:1.4}}>{b.title}</div>
+                    <div style={{fontSize:10.5, color:T.dim, marginTop:2}}>{b.minutes} min</div>
+                  </div>
+                ))}
+              </div>
+            ) : <div style={{fontSize:11.5, color:T.dimmer}}>Open.</div>}
+
+            {d.busy.length>0 && <div style={{marginTop:10, paddingTop:8, borderTop:'1px solid '+T.line}}>
+              {d.busy.map(b=>(
+                <div key={b.id} style={{fontSize:10.5, color:T.dimmer}}>{b.start}–{b.end} {b.label}</div>
+              ))}
+            </div>}
+          </Card>
+        ))}
+      </div>
+
+      <Card style={{marginBottom:14}}>
+        <div style={{fontSize:12, letterSpacing:1, textTransform:'uppercase', color:T.dim,
+          fontWeight:700, marginBottom:12}}>Course load</div>
+        <div style={{display:'grid', gap:9}}>
+          {db.courses.map(c=>{
+            const open = db.events.filter(e=>isWork(e) && !db.done[e.uid] &&
+              courseFor(e.course,db.courses)===c && daysUntil(icsToDate(e.at))>=0).length;
+            const soon = db.events.filter(e=>isWork(e) && !db.done[e.uid] &&
+              courseFor(e.course,db.courses)===c && daysUntil(icsToDate(e.at))>=0 && daysUntil(icsToDate(e.at))<=7).length;
+            return (
+              <div key={c.id} style={{display:'flex', alignItems:'center', gap:11}}>
+                <div style={{width:3, height:22, background:c.color, borderRadius:2}}/>
+                <div style={{flex:1, minWidth:0}}>
+                  <div style={{fontSize:13, fontWeight:650}}>{c.code} <span style={{color:T.dimmer, fontWeight:400}}>{c.name}</span></div>
+                  {editing && <div style={{marginTop:6}}>
+                    <input placeholder="e.g. MW 9:30–10:45, Glass Hall 101" defaultValue={c.meetText||''}
+                      onBlur={e=>setDb(d=>({...d, courses:d.courses.map(x=>x.id===c.id?{...x, meetText:e.target.value}:x)}))}
+                      style={{fontSize:12}}/>
+                  </div>}
+                  {!editing && c.meetText && <div style={{fontSize:11.5, color:T.dim, marginTop:2}}>{c.meetText}</div>}
+                </div>
+                <Pill tone={soon>3?T.bad:soon?T.warn:T.dimmer}>{soon} this week</Pill>
+                <Pill tone={T.dimmer}>{open} open</Pill>
+              </div>
+            );
+          })}
+        </div>
+        {editing && <div style={{fontSize:11.5, color:T.dimmer, marginTop:12, lineHeight:1.6}}>
+          Type your meeting times and click away to save. {inPerson.length} in-person, {online.length} online.
+        </div>}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================================================
+   SETTINGS — sync, feed refresh, backup
+   ============================================================ */
+function SettingsView({db, setDb, fs}){
+  const [icsBusy,setIcsBusy] = useState(false);
+  const [msg,setMsg] = useState('');
+  const fileRef = useRef(null);
+  const icsRef  = useRef(null);
+
+  const loadICSFile = async (f) => {
+    setIcsBusy(true); setMsg('');
+    try{
+      const text = await f.text();
+      const evs = parseICS(text).filter(e => courseFor(e.course, db.courses));
+      if(!evs.length) throw new Error('No events matched your Fall 2026 courses.');
+      setDb(d=>({...d, events:evs, settings:{...d.settings, lastSync:new Date().toISOString()}}));
+      setMsg('Loaded '+evs.length+' events from '+f.name+'.');
+    }catch(e){ setMsg('Failed: '+e.message); }
+    setIcsBusy(false);
+  };
+  const tryUrlSync = async () => {
+    const url = db.settings.icsUrl.trim();
+    if(!url){ setMsg('Paste your feed URL first.'); return; }
+    setIcsBusy(true); setMsg('');
+    /* Brightspace sends no CORS header, so a direct fetch from this page is
+       refused. Two proxies do the job: serve.ps1 at /api/ics when running
+       locally, and a Netlify function when hosted. */
+    const local = /^https?:\/\/localhost(:\d+)?$/.test(location.origin);
+    const q = '?url=' + encodeURIComponent(url);
+    const targets = local
+      ? [location.origin+'/api/ics'+q, location.origin+'/.netlify/functions/ics'+q, url]
+      : [location.origin+'/.netlify/functions/ics'+q, url];
+    let lastErr = '';
+    for(const t of targets){
+      try{
+        const r = await fetch(t);
+        if(!r.ok) throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,120));
+        const evs = parseICS(await r.text()).filter(e => courseFor(e.course, db.courses));
+        if(!evs.length) throw new Error('feed returned nothing matching your Fall 2026 courses');
+        setDb(d=>({...d, events:evs, settings:{...d.settings, lastSync:new Date().toISOString()}}));
+        setMsg('Synced '+evs.length+' events from Brightspace.');
+        setIcsBusy(false); return;
+      }catch(e){ lastErr = e.message; }
+    }
+    setMsg('Sync failed: '+lastErr+' — if that keeps happening, hit Download in the same Brightspace'
+      + ' Subscribe dialog and drop the .ics file below. That path always works.');
+    setIcsBusy(false);
+  };
+  const exportJSON = () => {
+    const blob = new Blob([JSON.stringify(db,null,1)],{type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ultramind-school-'+new Date().toISOString().slice(0,10)+'.json';
+    a.click(); URL.revokeObjectURL(a.href);
+  };
+  const importJSON = async (f) => {
+    try{
+      const d = JSON.parse(await f.text());
+      if(!d.v) throw new Error('not an Ultramind backup');
+      setDb(d); setMsg('Restored backup.');
+    }catch(e){ setMsg('Import failed: '+e.message); }
+  };
+
+  const Row = ({title, children, sub}) => (
+    <Card style={{marginBottom:13}}>
+      <div style={{fontSize:14, fontWeight:700, marginBottom:sub?4:10}}>{title}</div>
+      {sub && <div style={{fontSize:12, color:T.dim, marginBottom:11, lineHeight:1.6}}>{sub}</div>}
+      {children}
+    </Card>
+  );
+
+  return (
+    <div className="fade-in">
+      <H sub="Sync, backup, and how this thing gets your Brightspace data">Settings</H>
+
+      <Row title="Load lessons from Claude"
+        sub="On the Teach me tab, hit “Ask Claude for more lessons” — it copies your uploaded material plus your exam dates. Paste that into Claude, then paste the JSON it returns back in here.">
+        <LessonImport db={db} setDb={setDb}/>
+      </Row>
+
+      <Row title="Cloud sync"
+        sub="Saves to the same Supabase project the Command Center and Matrix Ledger use, in a row called 'school'. Any device that opens this page picks up the newest copy — no folder setup, no export files. Newest write wins, so do not edit the same thing on two machines at once.">
+        <div style={{display:'flex', gap:12, alignItems:'center', flexWrap:'wrap'}}>
+          <SyncDot state={fs.cloud.state}/>
+          <Btn ghost tone={T.line} onClick={fs.cloud.pull}>Pull now</Btn>
+          <Btn ghost tone={T.line} onClick={fs.cloud.push}>Push now</Btn>
+        </div>
+        {fs.cloud.state.err && <div style={{fontSize:11.5, color:T.bad, marginTop:10, lineHeight:1.6}}>
+          {fs.cloud.state.err}
+        </div>}
+        <div style={{fontSize:11.5, color:T.dimmer, marginTop:10, lineHeight:1.6}}>
+          Your Brightspace feed token is deliberately excluded from the cloud row — the
+          publishable key sits in this file, so anything stored there is readable by anyone
+          holding it. Paste the feed URL once per machine.
+        </div>
+      </Row>
+
+      <Row title="OneDrive backup"
+        sub={FS_SUPPORTED
+          ? 'Optional second copy. Cloud sync above already covers the laptop; this writes school-data.json into the OneDrive folder as well, so your work survives the database being unreachable. Once per machine.'
+          : 'This browser does not support folder writes. Cloud sync above still works; Export / Import below is the manual fallback.'}>
+        <div style={{display:'flex', gap:9, alignItems:'center', flexWrap:'wrap'}}>
+          {FS_SUPPORTED && <Btn onClick={fs.connect}>{fs.dir ? 'Reconnect folder' : 'Connect OneDrive folder'}</Btn>}
+          <span style={{fontSize:12.5, color: fs.dir?T.good:T.dim}}>
+            {fs.dir ? 'Connected · last write '+(fs.lastWrite||'—') : 'Not connected — saving to this device only'}
+          </span>
+        </div>
+        {!window.isSecureContext && <div style={{fontSize:11.5, color:T.warn, marginTop:10, lineHeight:1.6}}>
+          Folder sync needs an http origin. Open this from http://localhost:8777/school/ (run serve.ps1), not by double-clicking the file.
+        </div>}
+      </Row>
+
+      <Row title="Brightspace calendar feed"
+        sub="Brightspace publishes every due date as an iCal feed. In Brightspace: Calendar → Subscribe → copy the URL, or hit Download and drop the .ics file here.">
+        <input placeholder="https://brightspace.missouristate.edu/d2l/le/calendar/feed/user/feed.ics?token=…"
+          value={db.settings.icsUrl}
+          onChange={e=>setDb(d=>({...d, settings:{...d.settings, icsUrl:e.target.value}}))}
+          style={{fontSize:12, marginBottom:10}} className="mono"/>
+        <div style={{display:'flex', gap:9, flexWrap:'wrap'}}>
+          <Btn onClick={tryUrlSync} disabled={icsBusy}>{icsBusy?'Working…':'Try URL sync'}</Btn>
+          <Btn ghost tone={T.line} onClick={()=>icsRef.current&&icsRef.current.click()}>Drop .ics file</Btn>
+          <input ref={icsRef} type="file" accept=".ics" hidden
+            onChange={e=>{ if(e.target.files[0]) loadICSFile(e.target.files[0]); e.target.value=''; }}/>
+        </div>
+        <div style={{fontSize:11.5, color:T.dim, marginTop:10}}>
+          {db.events.length} events loaded
+          {db.settings.lastSync ? ' · last sync '+new Date(db.settings.lastSync).toLocaleString() :
+            ' · seeded from your feed on '+(window.SEED_BUILT||'setup')}
+        </div>
+      </Row>
+
+      <Row title="Backup" sub="A full copy of everything: work status, uploaded material, notes, and card progress.">
+        <div style={{display:'flex', gap:9, flexWrap:'wrap'}}>
+          <Btn ghost tone={T.line} onClick={exportJSON}>Export JSON</Btn>
+          <Btn ghost tone={T.line} onClick={()=>fileRef.current&&fileRef.current.click()}>Import JSON</Btn>
+          <input ref={fileRef} type="file" accept=".json" hidden
+            onChange={e=>{ if(e.target.files[0]) importJSON(e.target.files[0]); e.target.value=''; }}/>
+        </div>
+      </Row>
+
+      <Row title="Reset" sub="Wipes local data and reloads the seeded Brightspace events. Uploaded material and card progress are lost.">
+        <Btn ghost tone={T.bad} onClick={()=>{
+          if(window.confirm && !window.confirm('Wipe everything and start over?')) return;
+          localStorage.removeItem(LS_KEY); setDb(blankDB());
+        }}>Reset everything</Btn>
+      </Row>
+
+      {msg && <Card style={{borderColor:T.accent2+'55', background:T.accent2+'0a'}}>
+        <div style={{fontSize:12.5, lineHeight:1.65, color:T.text}}>{msg}</div></Card>}
+    </div>
+  );
+}
+
+/* ============================================================
+   APP SHELL
+   ============================================================ */
+function App(){
+  const [db,setDbRaw] = useState(()=>{
+    const d = loadLocal() || blankDB();
+    /* Idempotent: titles saved before the cleaner existed get tidied on open. */
+    return {...d, events: normalizeEvents(d.events)};
+  });
+  const [nav,setNav]  = useState({view:'today'});
+  const [fs,setFs]    = useState({dir:null, lastWrite:null});
+  const [saved,setSaved] = useState(false);
+  const [mobileOpen,setMobileOpen] = useState(false);
+  const dirRef = useRef(null);
+
+  const setDb = useCallback(updater => {
+    setDbRaw(prev => {
+      const next = typeof updater==='function' ? updater(prev) : updater;
+      return {...next, updatedAt:new Date().toISOString()};
+    });
+  },[]);
+
+  /* Persist locally on every change, debounced so typing does not thrash. */
+  useEffect(()=>{
+    const t = setTimeout(()=>{
+      saveLocal(db);
+      setSaved(true); setTimeout(()=>setSaved(false), 1200);
+      if(dirRef.current){
+        fsWrite(dirRef.current, db)
+          .then(()=>setFs(f=>({...f, lastWrite:new Date().toLocaleTimeString()})))
+          .catch(()=>{});
+      }
+    }, 500);
+    return ()=>clearTimeout(t);
+  },[db]);
+
+  /* Cloud is the primary sync layer; OneDrive is the offline backup. Both
+     resolve against the same updatedAt stamp, so whichever copy is newest wins
+     regardless of which layer it arrived through. */
+  const applyRemote = useCallback(next => setDbRaw(next), []);
+  /* Captured once, before the first save writes a localStorage entry. */
+  const freshDevice = useRef(loadLocal() === null);
+  const cloud = useCloudSync(db, applyRemote, freshDevice.current);
+
+  /* On open, adopt the OneDrive copy when it is newer than this device's. */
+  useEffect(()=>{ (async()=>{
+    if(!FS_SUPPORTED) return;
+    const h = await fsGetFolder();
+    if(!h || h.needsPermission) return;
+    dirRef.current = h; setFs(f=>({...f, dir:h}));
+    const remote = await fsRead(h);
+    if(remote && remote.v && (!db.updatedAt || new Date(remote.updatedAt) > new Date(db.updatedAt))){
+      setDbRaw(remote);
+    }
+  })(); },[]);
+
+  const connectFolder = async () => {
+    try{
+      const h = await fsPickFolder();
+      dirRef.current = h; setFs(f=>({...f, dir:h}));
+      const remote = await fsRead(h);
+      if(remote && remote.v && window.confirm &&
+         window.confirm('Found existing school-data.json in that folder. Load it? (Cancel keeps what is on this device.)')){
+        setDbRaw(remote);
+      } else {
+        await fsWrite(h, db);
+        setFs(f=>({...f, lastWrite:new Date().toLocaleTimeString()}));
+      }
+    }catch(e){ /* user dismissed the picker */ }
+  };
+
+  const go = useCallback(n => { setNav(n); setMobileOpen(false); window.scrollTo && window.scrollTo(0,0); },[]);
+
+  const items = triage(db, 14);
+  const urgent = items.filter(i=>i.days<=1).length;
+  const dueCards = db.cards.filter(cardDue).length;
+  const nextExam = upcomingExams(db)[0];
+
+  const lessonsLeft = (db.lessons||[]).filter(l=>!(db.lessonLog||{})[l.id]).length;
+  const NAV = [
+    {k:'today', label:'Today', icon:'◉', badge:urgent||null, tone:T.bad},
+    {k:'teach', label:'Teach me', icon:'✦', badge:lessonsLeft||null, tone:T.accent2},
+    {k:'schedule', label:'Schedule', icon:'▦'},
+    {k:'exams', label:'Exams', icon:'⚑', badge:nextExam?Math.max(0,daysUntil(nextExam.date)):null, tone:T.warn},
+    {k:'lab', label:'Study Lab', icon:'▤', badge:db.materials.length||null},
+    {k:'review', label:'Review', icon:'◆', badge:dueCards||null, tone:T.accent2},
+  ];
+
+  const body = (()=>{
+    if(nav.view==='today')    return <TodayView db={db} setDb={setDb} go={go}/>;
+    if(nav.view==='teach')    return <TeachView db={db} setDb={setDb} go={go}/>;
+    if(nav.view==='schedule') return <ScheduleView db={db} setDb={setDb}/>;
+    if(nav.view==='exams')    return <ExamsView db={db}/>;
+    if(nav.view==='lab')      return (
+      <div className="fade-in">
+        <H sub="Drop a deck. Get an outline, key terms, flashcards, and the fastest way to study that specific file.">Study Lab</H>
+        <MaterialList db={db} setDb={setDb} courseId={null} go={go}/>
+      </div>);
+    if(nav.view==='material') return <MaterialView db={db} setDb={setDb} materialId={nav.materialId} go={go}/>;
+    if(nav.view==='review')   return <ReviewView db={db} setDb={setDb} filter={nav} go={go}/>;
+    if(nav.view==='settings') return <SettingsView db={db} setDb={setDb} fs={{...fs, connect:connectFolder, cloud}}/>;
+    if(nav.view==='course'){
+      const c = db.courses.find(x=>x.id===nav.courseId);
+      return c ? <CourseView db={db} setDb={setDb} course={c} go={go}/> : <Empty icon="?" title="Course not found"/>;
+    }
+    return null;
+  })();
+
+  const NavBtn = ({active, onClick, children, badge, tone, icon}) => (
+    <button onClick={onClick} style={{
+      display:'flex', alignItems:'center', gap:10, width:'100%', textAlign:'left',
+      padding:'9px 11px', borderRadius:10, fontSize:13, fontWeight:600,
+      background: active ? 'rgba(232,90,120,.14)' : 'transparent',
+      color: active ? T.text : T.dim,
+      borderLeft:'2px solid '+(active?T.accent:'transparent'), transition:'all .12s'}}>
+      <span style={{width:15, textAlign:'center', opacity:active?1:.6, fontSize:12}}>{icon}</span>
+      <span style={{flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis'}}>{children}</span>
+      {badge ? <span style={{fontSize:10, fontWeight:800, padding:'2px 6px', borderRadius:999,
+        background:(tone||T.dimmer)+'26', color:tone||T.dim}}>{badge}</span> : null}
+    </button>
+  );
+
+  return (
+    <React.Fragment>
+      <aside style={{
+        width:236, flexShrink:0, background:T.panel, borderRight:'1px solid '+T.line,
+        display:'flex', flexDirection:'column', padding:'18px 12px', overflowY:'auto',
+        position: window.innerWidth<860 ? 'fixed' : 'relative',
+        left: window.innerWidth<860 ? (mobileOpen?0:-260) : 0,
+        top:0, bottom:0, zIndex:50, transition:'left .2s'}}>
+        <div style={{padding:'0 8px 16px'}}>
+          <div style={{fontSize:15.5, fontWeight:900, letterSpacing:-.3}}>
+            <span style={{color:T.accent}}>ULTRA</span>MIND
+          </div>
+          <div style={{fontSize:10.5, color:T.dimmer, letterSpacing:1.2, textTransform:'uppercase', marginTop:3}}>
+            Fall 2026 · Missouri State
+          </div>
+        </div>
+
+        <div style={{display:'grid', gap:2, marginBottom:16}}>
+          {NAV.map(n=>(
+            <NavBtn key={n.k} active={nav.view===n.k} onClick={()=>go({view:n.k})}
+              badge={n.badge} tone={n.tone} icon={n.icon}>{n.label}</NavBtn>
+          ))}
+        </div>
+
+        <div style={{padding:'0 11px 8px', fontSize:10, letterSpacing:1.1, textTransform:'uppercase',
+          color:T.dimmer, fontWeight:700}}>Classes</div>
+        <div style={{display:'grid', gap:2, marginBottom:16}}>
+          {db.courses.map(c=>{
+            const soon = db.events.filter(e=>isWork(e) && !db.done[e.uid] &&
+              courseFor(e.course,db.courses)===c && daysUntil(icsToDate(e.at))>=0 && daysUntil(icsToDate(e.at))<=7).length;
+            const active = nav.view==='course' && nav.courseId===c.id;
+            return (
+              <button key={c.id} onClick={()=>go({view:'course', courseId:c.id})} style={{
+                display:'flex', alignItems:'center', gap:9, width:'100%', textAlign:'left',
+                padding:'8px 11px', borderRadius:10, fontSize:12.5, fontWeight:600,
+                background: active ? c.color+'1c' : 'transparent', color: active ? T.text : T.dim,
+                borderLeft:'2px solid '+(active?c.color:'transparent')}}>
+                <span style={{width:6, height:6, borderRadius:2, background:c.color, flexShrink:0}}/>
+                <span style={{flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis'}}>{c.code}</span>
+                {soon>0 && <span style={{fontSize:10, fontWeight:800, color:soon>3?T.bad:T.dim}}>{soon}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{marginTop:'auto', paddingTop:14, borderTop:'1px solid '+T.line}}>
+          <NavBtn active={nav.view==='settings'} onClick={()=>go({view:'settings'})} icon="⚙">Settings</NavBtn>
+          <div style={{padding:'9px 11px 0'}}>
+            <SyncDot state={cloud.state} compact/>
+            <div style={{fontSize:10, color:T.dimmer, marginTop:3}}>
+              {fs.dir ? 'OneDrive backup on' : 'local + cloud'}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {mobileOpen && window.innerWidth<860 &&
+        <div onClick={()=>setMobileOpen(false)}
+          style={{position:'fixed', inset:0, background:'rgba(0,0,0,.55)', zIndex:40}}/>}
+
+      <main style={{flex:1, overflowY:'auto', padding:'26px 30px 70px', minWidth:0}}>
+        {window.innerWidth<860 && (
+          <button onClick={()=>setMobileOpen(true)}
+            style={{marginBottom:16, color:T.dim, fontSize:20}}>&#9776;</button>
+        )}
+        <div style={{maxWidth:1020, margin:'0 auto'}}>
+          {cloud.state.status==='down' && (
+            <div style={{background:T.bad+'14', border:'1px solid '+T.bad+'55', borderRadius:12,
+              padding:'12px 15px', marginBottom:18, display:'flex', gap:12,
+              alignItems:'center', flexWrap:'wrap'}}>
+              <div style={{flex:1, minWidth:220}}>
+                <div style={{fontSize:13, fontWeight:700, color:T.bad}}>
+                  Not syncing — {cloud.state.err}
+                </div>
+                <div style={{fontSize:11.5, color:T.dim, marginTop:3, lineHeight:1.55}}>
+                  Changes are saving on this device only. Your laptop will not see them until this clears.
+                </div>
+              </div>
+              <Btn ghost tone={T.bad} onClick={cloud.pull}>Retry</Btn>
+            </div>
+          )}
+          {body}
+        </div>
+      </main>
+    </React.Fragment>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+</script>
+</body>
+</html>
