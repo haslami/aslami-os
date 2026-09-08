@@ -1102,10 +1102,18 @@ function prevCalc(){
   const tot=techs.reduce((a,n)=>a+rateFor(n,solo),0);
   el.innerHTML=(solo?'<span class="pill solo">solo</span> ':"")+esc(parts.join("  ·  "))+"  ·  labor "+pct(tot);
 }
-function splitRows(txt){const rows=[];let row=[],cell="",q=false;
+/* Pick ONE delimiter. Accepting both a tab and a comma looks forgiving and is
+   actively dangerous: a sheet pastes as tab-separated, and a price of $1,055.00
+   then splits into "$1" and "055.00", shifting every column after it one to the
+   left. Payment lands in the crew field, the job imports as a dollar, and the
+   only clue is a warning about an unknown tech. If the paste has any tab in it,
+   it is tab-separated — commas inside it are part of the numbers. */
+function splitRows(txt){
+  const sep = txt.indexOf("\t")>-1 ? "\t" : ",";
+  const rows=[];let row=[],cell="",q=false;
   for(let i=0;i<txt.length;i++){const c=txt[i];
     if(q){if(c==='"'){if(txt[i+1]==='"'){cell+='"';i++;}else q=false;}else cell+=c;}
-    else{if(c==='"')q=true;else if(c==="\t"||c===","){row.push(cell);cell="";}
+    else{if(c==='"')q=true;else if(c===sep){row.push(cell);cell="";}
       else if(c==="\n"){row.push(cell);rows.push(row);row=[];cell="";}else if(c!=="\r")cell+=c;}}
   row.push(cell);rows.push(row);return rows.filter(r=>r.some(c=>String(c).trim()!==""));}
 const nrm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
