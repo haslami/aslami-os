@@ -250,7 +250,7 @@ const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]
 
 /* ---------------- state ---------------- */
 function blank(){return{
-  v:11, savedAt:0,
+  v:12, savedAt:0,
   settings:{
     rates:{owner:.35,team:.25,junior:.225,soloBonus:.15,tax:.0765,minWage:13.75},
     dist:{Habib:.175,Ryan:.175,"Savings / Tax":.25,Checking:.40},
@@ -266,7 +266,7 @@ function blank(){return{
     services:["Basic","Standard","Premium","Deluxe","Exterior Only","Ceramic Coating","Add-on","Cancellation Fee","Other"],
     methods:["Card (MO)","Card (KS)","Cash","Venmo","Check (written to bus.)","Check (written to Habib)","Check","Zelle","Stripe (online)","Other"],
     depositAmount:50,   /* standard online booking deposit, taken on Stripe */
-    cashMethods:["Cash"],
+    cashMethods:["Cash","Check (written to Habib)"],
     ksMethods:["Card (KS)"],
     spendCats:["Gas","Supplies","Van","Merch","Food","Ads","Accountant","Insurance","GHL","Other"]
   },
@@ -328,6 +328,15 @@ function migrate_(st){
     ["Check (written to bus.)","Check (written to Habib)"].forEach(function(m){
       if(M.indexOf(m)<0) M.splice(Math.max(0,M.indexOf("Check")<0?M.length-1:M.indexOf("Check")),0,m); });
     st.v=11; } }catch(e){}
+  /* v12: a cheque written to Habib never touches the business account — it is
+     money already in an owner's hand, so it pays owner work pay the same way cash
+     does and needs no transfer. A cheque written to the business DOES land in the
+     account, so paying an owner from it is a transfer and carries the tax
+     reserve. */
+  try{ if((st.v||0)<12){
+    var CM=st.settings.cashMethods||(st.settings.cashMethods=[]);
+    if(CM.indexOf("Check (written to Habib)")<0) CM.push("Check (written to Habib)");
+    st.v=12; } }catch(e){}
   /* belt and braces: a rate or setting must never be undefined, whatever the
      version says, because an undefined rate pays somebody the wrong amount. */
   try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
@@ -811,7 +820,7 @@ function renderPeriod(){
         ${t.jobs?`<span>${t.jobs} jobs · ${t.solo} solo</span>`:""}</div></div>
     <div class="kpis">
       ${kpi("Job revenue",money0(t.revenue),"tips excluded")}
-      ${kpi("Cash collected",money0(t.cashIn),"available for owner pay","cash")}
+      ${kpi("In hand",money0(t.cashIn),"cash + cheques to you — pays owners first","cash")}
       ${t.deposits?kpi("Online deposits",money0(t.deposits),"taken on Stripe up front","cash"):""}
       ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
       ${kpi("Employee wages",money0(t.empWages),"through QuickBooks")}
@@ -889,14 +898,14 @@ function renderMoves(){
       <div><div class="what">${what}</div><div class="why">${why}</div></div>
       <div class="amt">${money(amt)}</div></div>`;
   const cashRows=P.share.filter(s=>s.cash>0.004)
-    .map(s=>mv("cash-"+s.name,"cash","Hand "+esc(s.name)+" "+money(s.cash)+" in cash",
-      "Part of the "+money(s.earned)+" they earned working jobs. Paying it from cash on hand means no bank transfer for this part.",s.cash)).join("");
+    .map(s=>mv("cash-"+s.name,"cash",esc(s.name)+" takes "+money(s.cash)+" from money already in hand",
+      "Part of the "+money(s.earned)+" they earned working jobs, settled from cash collected and any cheque written to them directly. That money never passed through the business account, so there is no transfer and no tax reserve on this part.",s.cash)).join("");
   const transferRows=P.share.filter(s=>s.transfer>0.004)
     .map(s=>mv("xfer-"+s.name,"bank","Transfer to "+esc(s.name),
-      "The rest of their "+money(s.earned)+" work pay, after the cash above.",s.transfer)).join("");
+      "The rest of their "+money(s.earned)+" work pay, after what they already hold. This part leaves the business account, which is what the income tax reserve is calculated on.",s.transfer)).join("");
   $("#v-moves").innerHTML=`
     <div class="kpis">
-      ${kpi("Cash collected",money0(t.cashIn),"this period, deposits excluded","cash")}
+      ${kpi("In hand",money0(t.cashIn),"cash + cheques to you, deposits excluded","cash")}
       ${t.deposits?kpi("Online deposits",money0(t.deposits),"already in the bank via Stripe","cash"):""}
       ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
       ${kpi("Covered by cash",money0(P.cashToOwners),P.ownerPay?pct(P.cashToOwners/P.ownerPay)+" of owner pay":"","cash")}
@@ -907,7 +916,7 @@ function renderMoves(){
     <div class="card">
       <h2>Do these, in this order</h2>
       <p class="sub">Tick them off as you go. This resets per pay period.</p>
-      ${cashRows?`<div class="grouplbl">1 · Pay owners from cash first</div>${cashRows}`:""}
+      ${cashRows?`<div class="grouplbl">1 · Pay owners from money already in hand</div>${cashRows}`:""}
       ${P.cashLeft>0.004?mv("deposit","cash","Deposit the remaining cash",
         "Cash left after paying owners. Put it in the business account so the books match the bank.",P.cashLeft):""}
       ${!cashRows&&P.cashLeft<=0.004?`<p class="hint">No cash collected this period — everything goes by transfer.</p>`:""}
@@ -1451,7 +1460,7 @@ function renderYear(){
         panel disappears and the year total means one thing again.</p></div>`:""}
     <div class="kpis">
       ${kpi("Owner work pay",money0(y.own),"Habib + Ryan, YTD")}
-      ${kpi("Cash collected",money0(y.cash),"YTD","cash")}
+      ${kpi("In hand",money0(y.cash),"cash + cheques to you, YTD","cash")}
       ${kpi("Kansas sales",money0(y.ks),"YTD")}
       ${kpi("Set aside to savings",money0(y.sav),"income + KS sales tax","pos")}
       ${kpi("Hours logged",r2(y.hrs)||"—","across the crew")}
