@@ -250,7 +250,7 @@ const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]
 
 /* ---------------- state ---------------- */
 function blank(){return{
-  v:10, savedAt:0,
+  v:11, savedAt:0,
   settings:{
     rates:{owner:.35,team:.25,junior:.225,soloBonus:.15,tax:.0765,minWage:13.75},
     dist:{Habib:.175,Ryan:.175,"Savings / Tax":.25,Checking:.40},
@@ -264,7 +264,7 @@ function blank(){return{
            {name:"Christian",role:"Technician",active:true},
            {name:"Hayden",role:"Technician",active:false}],
     services:["Basic","Standard","Premium","Deluxe","Exterior Only","Ceramic Coating","Add-on","Cancellation Fee","Other"],
-    methods:["Card (MO)","Card (KS)","Cash","Venmo","Check","Zelle","Stripe (online)","Other"],
+    methods:["Card (MO)","Card (KS)","Cash","Venmo","Check (written to bus.)","Check (written to Habib)","Check","Zelle","Stripe (online)","Other"],
     depositAmount:50,   /* standard online booking deposit, taken on Stripe */
     cashMethods:["Cash"],
     ksMethods:["Card (KS)"],
@@ -319,6 +319,15 @@ function migrate_(st){
     (st.settings.techs||[]).forEach(function(t){
       if(t.name==="Gannon"||t.name==="Hayden") t.active=false; });
     st.v=10; } }catch(e){}
+  /* v11: the Work Log offers two kinds of cheque and the ledger only knew one,
+     so every cheque row imported with an "unknown payment" warning. Which one it
+     is matters: written to the business it lands in the account, written to
+     Habib it never enters the business at all. */
+  try{ if((st.v||0)<11){
+    var M=st.settings.methods||(st.settings.methods=[]);
+    ["Check (written to bus.)","Check (written to Habib)"].forEach(function(m){
+      if(M.indexOf(m)<0) M.splice(Math.max(0,M.indexOf("Check")<0?M.length-1:M.indexOf("Check")),0,m); });
+    st.v=11; } }catch(e){}
   /* belt and braces: a rate or setting must never be undefined, whatever the
      version says, because an undefined rate pays somebody the wrong amount. */
   try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
