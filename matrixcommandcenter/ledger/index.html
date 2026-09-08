@@ -66,7 +66,10 @@ body{margin:0;background:var(--bg);color:var(--ink);
 .side .spacer{flex:1}
 .syncbox{font-family:"JetBrains Mono",monospace;font-size:.58rem;color:var(--mut);padding:.5rem .6rem;line-height:1.5}
 @media(max-width:899px){ .syncbox{display:none} }
-main{padding:clamp(.9rem,2.5vw,1.8rem);padding-bottom:5.5rem;max-width:1180px}
+/* A grid item defaults to min-width:auto, so it refuses to shrink below its
+   widest child and drags the whole page sideways instead of letting .scroll
+   scroll inside itself. */
+main{padding:clamp(.9rem,2.5vw,1.8rem);padding-bottom:5.5rem;max-width:1180px;min-width:0}
 @media(min-width:900px){ main{padding-bottom:2rem} }
 
 .top{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin-bottom:1.1rem}
@@ -268,7 +271,8 @@ function blank(){return{
     depositAmount:50,   /* standard online booking deposit, taken on Stripe */
     cashMethods:["Cash","Check (written to Habib)"],
     ksMethods:["Card (KS)"],
-    spendCats:["Gas","Supplies","Van","Merch","Food","Ads","Accountant","Insurance","GHL","Other"]
+    spendCats:["Gas","Supplies","Van","Merch","Food","Ads","Accountant","Insurance","GHL","Other"],
+    merchantRules:{}
   },
   jobs:[], spend:{}, moves:{}, submitted:{}, extras:{}
 };}
@@ -337,10 +341,15 @@ function migrate_(st){
     var CM=st.settings.cashMethods||(st.settings.cashMethods=[]);
     if(CM.indexOf("Check (written to Habib)")<0) CM.push("Check (written to Habib)");
     st.v=12; } }catch(e){}
+  /* v13: spend can now be imported straight from the Chase export, and the
+     merchant->section lessons it learns have to live in settings so they sync
+     to every device instead of being relearned on each one. */
+  try{ if((st.v||0)<13){ st.settings.merchantRules=st.settings.merchantRules||{}; st.v=13; } }catch(e){}
   /* belt and braces: a rate or setting must never be undefined, whatever the
      version says, because an undefined rate pays somebody the wrong amount. */
   try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
   try{ if(st.settings.depositAmount===undefined) st.settings.depositAmount=50; }catch(e){}
+  try{ if(!st.settings.merchantRules) st.settings.merchantRules={}; }catch(e){}
   if(!st.extras) st.extras={};
   return st;
 }
@@ -1228,6 +1237,171 @@ function previewImport(){
   $("#cancelImport").addEventListener("click",()=>{box.innerHTML="";$("#paste").value="";});
 }
 
+/* ---- CHASE EXPORT -> SPEND -------------------------------------------------
+   Reading a statement and typing ten totals by hand is where the finance hour
+   actually goes, and every one of those numbers is a chance to drop a digit.
+   This takes the raw Chase CSV instead and does the four things that are easy
+   to get wrong by hand:
+     - throws away card PAYMENTS. Paying the bill is not spending; counting it
+       double-counts every purchase the payment covered.
+     - nets returns against their own category rather than ignoring them.
+     - keeps only rows whose TRANSACTION date lands in the period on screen —
+       statement periods and pay periods do not line up, and the difference is
+       invisible once the numbers are totals.
+     - remembers what you told it a merchant was, so each period needs less
+       input than the one before it. */
+
+const SEED_RULES=[
+  ["RAPID REACH","GHL"],["GOHIGHLEVEL","GHL"],["HIGHLEVEL","GHL"],
+  ["GOOGLE","Ads"],["LSA","Ads"],["YELP","Ads"],["FACEBK","Ads"],["META PLATFORMS","Ads"],["NEXTDOOR","Ads"],
+  ["ARNDT","Accountant"],["CPA","Accountant"],["QUICKBOOKS","Accountant"],["INTUIT","Accountant"],
+  ["STATE FARM","Insurance"],["SIMPLY BUSINESS","Insurance"],["PROGRESSIVE","Insurance"],
+  ["GEICO","Insurance"],["HISCOX","Insurance"],["NEXT INSURANCE","Insurance"],["INSURANCE","Insurance"],
+  ["CASEYS","Gas"],["QUIKTRIP","Gas"],["QT ","Gas"],["PHILLIPS","Gas"],["BP#","Gas"],["SHELL OIL","Gas"],
+  ["CONOCO","Gas"],["MURPHY","Gas"],["KWIK","Gas"],["CIRCLE K","Gas"],["SINCLAIR","Gas"],["EXXON","Gas"],
+  ["CHEVRON","Gas"],["7-ELEVEN","Gas"],["LOVES TRAVEL","Gas"],["FUEL","Gas"],
+  ["TAKE 5","Van"],["OIL CHANGE","Van"],["JIFFY LUBE","Van"],["VALVOLINE","Van"],["DISCOUNT TIRE","Van"],
+  ["TIRE","Van"],["AUTO REPAIR","Van"],["CAR WASH","Van"],["NAPA","Van"],["U-HAUL","Van"],["MIDAS","Van"],
+  ["GYEON","Supplies"],["CLEAN GARAGE","Supplies"],["BIO BOMBS","Supplies"],["CHEMICAL GUYS","Supplies"],
+  ["KC AUTO CAR CARE","Supplies"],["DETAIL","Supplies"],["AMAZON","Supplies"],["AUTOZONE","Supplies"],
+  ["O'REILLY","Supplies"],["OREILLY","Supplies"],["ADVANCE AUTO","Supplies"],["HARBOR FREIGHT","Supplies"],
+  ["HOME DEPOT","Supplies"],["MENARDS","Supplies"],["LOWE","Supplies"],["WAL-MART","Supplies"],
+  ["WALMART","Supplies"],["SAMS CLUB","Supplies"],["COSTCO","Supplies"],["WEN PRODUCTS","Supplies"],
+  ["MCDONALD","Food"],["CHIPOTLE","Food"],["TACO","Food"],["SUBWAY","Food"],["CHICK-FIL-A","Food"],
+  ["PANERA","Food"],["STARBUCKS","Food"],["RAISING CANE","Food"],["WENDY","Food"],["DOORDASH","Food"],
+  ["JIMMY JOHN","Food"],["PIZZA","Food"],["QDOBA","Food"],["SONIC DRIVE","Food"],["CULVER","Food"],
+  ["CUSTOM INK","Merch"],["VISTAPRINT","Merch"],["EMBROID","Merch"],["SCREEN PRINT","Merch"]
+];
+
+/* Chase writes one merchant a dozen ways — AMAZON MKTPL*533W01H21, CASEYS
+   #3946, GOOGLE *ADS7563098072 — so strip the varying tail and one lesson
+   covers every future charge from that merchant. Processor prefixes are the
+   exception: in "SQ *KC AUTO CAR CARE" the merchant is AFTER the star, and
+   reducing it to "SQ" would file every Square charge in the world together. */
+function merchKey(desc){
+  var s=String(desc==null?"":desc).toUpperCase().trim();
+  s=s.replace(/^(SQ|TST|SP|PY|IN|PAYPAL|EB|WPY)\s*\*\s*/,"");
+  s=s.replace(/\*.*$/,"").replace(/#.*$/,"");
+  return s.replace(/\d+/g," ").replace(/[^A-Z ]/g," ").replace(/\s+/g," ").trim();
+}
+function catFor(desc){
+  var learned=(S.settings.merchantRules||{})[merchKey(desc)];
+  if(learned && S.settings.spendCats.indexOf(learned)>-1) return {cat:learned,how:"learned"};
+  var up=String(desc==null?"":desc).toUpperCase();
+  for(var i=0;i<SEED_RULES.length;i++)
+    if(up.indexOf(SEED_RULES[i][0])>-1 && S.settings.spendCats.indexOf(SEED_RULES[i][1])>-1)
+      return {cat:SEED_RULES[i][1],how:"auto"};
+  return {cat:"",how:"none"};
+}
+
+let PENDSPEND=null;
+function parseChase(txt){
+  const rows=splitRows(txt);
+  if(rows.length<2) return {err:"That needs the header row too — select the whole file, header included."};
+  const H=rows[0].map(nrm), ix=n=>H.indexOf(n);
+  const iDate=ix("transactiondate")>-1?ix("transactiondate"):ix("date"),
+        iDesc=ix("description"), iAmt=ix("amount"), iType=ix("type"), iCard=ix("card");
+  if(iDate<0||iDesc<0||iAmt<0)
+    return {err:"Missing a column — needs Transaction Date, Description and Amount. Found: "+rows[0].join(", ")};
+  const per=PERIODS.find(x=>x.id===CUR);
+  const keep=[], skip={pay:0,payN:0,out:0}, where={};
+  for(let i=1;i<rows.length;i++){
+    const r=rows[i]; if(!String(r[iDesc]||"").trim() && !String(r[iAmt]||"").trim()) continue;
+    const type=String(iType>-1?r[iType]:"").trim().toLowerCase(), amt=num(r[iAmt]);
+    if(type==="payment"){ skip.pay=r2(skip.pay+Math.abs(amt)); skip.payN++; continue; }
+    if(!amt) continue;
+    const iso=parseDate(r[iDate]); if(!iso) continue;
+    const p=periodOf(iso);
+    if(!p||p.id!==CUR){ skip.out++; const k=p?p.short:"outside the calendar"; where[k]=(where[k]||0)+1; continue; }
+    const desc=String(r[iDesc]).trim(), m=catFor(desc);
+    keep.push({date:iso,desc:desc,card:iCard>-1?String(r[iCard]).trim():"",
+               amt:r2(-amt),cat:m.cat,how:m.how,seed:m.cat});
+  }
+  if(!keep.length) return {err:"Nothing in this file falls inside "+per.short+
+    (skip.out?". "+skip.out+" row"+(skip.out===1?"":"s")+" belong to other periods — switch the period at the top and import again.":".")};
+  keep.sort((a,b)=>a.date.localeCompare(b.date)||b.amt-a.amt);
+  return {rows:keep,skip:skip,where:where,per:per};
+}
+
+function spendPreview(){
+  const box=$("#spendPreview"); if(!PENDSPEND){ box.innerHTML=""; return; }
+  const d=PENDSPEND, cats=S.settings.spendCats, tot={};
+  let unfiled=0, sum=0, nOK=0;
+  d.rows.forEach(r=>{ sum=r2(sum+r.amt);
+    if(r.cat){ tot[r.cat]=r2((tot[r.cat]||0)+r.amt); nOK++; } else unfiled=r2(unfiled+r.amt); });
+  const used=cats.filter(c=>tot[c]!==undefined).sort((a,b)=>tot[b]-tot[a]);
+  const miss=d.rows.length-nOK;
+  const outBits=Object.keys(d.where).map(k=>d.where[k]+" in "+k);
+  const pills=['<span class="pill pos">'+d.rows.length+' transactions</span>']
+    .concat(miss?['<span class="pill warn">'+miss+' need a section</span>']:[])
+    .concat(d.skip.payN?['<span class="pill mut">'+d.skip.payN+' card payment'+(d.skip.payN===1?"":"s")+' skipped, '+money0(d.skip.pay)+'</span>']:[])
+    .concat(d.skip.out?['<span class="pill mut">'+d.skip.out+' outside '+esc(d.per.short)+'</span>']:[])
+    .join("");
+  const body=d.rows.map((r,i)=>{
+    const opt=['<option value="">— pick —</option>'].concat(
+      cats.map(c=>'<option value="'+esc(c)+'"'+(c===r.cat?" selected":"")+">"+esc(c)+"</option>")).join("");
+    return '<tr'+(r.cat?"":' style="background:var(--warn-soft)"')+'>'+
+      '<td>'+esc(fmtD(r.date))+'</td>'+
+      '<td>'+esc(r.desc)+(r.amt<0?' <span class="pill pos">refund</span>':"")+
+        (r.how==="learned"?' <span class="pill mut" title="you taught it this one">learned</span>':"")+'</td>'+
+      '<td class="n">'+money(r.amt)+'</td>'+
+      '<td><select data-sc="'+i+'">'+opt+'</select></td></tr>';}).join("");
+  box.innerHTML='<div class="bar" style="margin-top:.8rem">'+pills+'</div>'+
+    (outBits.length?'<p class="hint">Skipped rows land in: '+esc(outBits.join(", "))+'.</p>':"")+
+    '<div class="scroll" style="margin-top:.5rem;max-height:17rem;overflow-y:auto"><table>'+
+      '<thead><tr><th>Date</th><th>Merchant</th><th class="n">Amount</th><th>Section</th></tr></thead>'+
+      '<tbody>'+body+'</tbody></table></div>'+
+    '<div class="scroll" style="margin-top:.6rem"><table>'+
+      '<thead><tr><th>Section</th><th class="n">Total</th></tr></thead><tbody>'+
+      used.map(c=>'<tr><td>'+esc(c)+'</td><td class="n mono">'+money(tot[c])+'</td></tr>').join("")+
+      (miss?'<tr style="background:var(--warn-soft)"><td>Not filed yet</td><td class="n mono">'+money(unfiled)+'</td></tr>':"")+
+      '</tbody><tfoot><tr><td><b>Total</b></td><td class="n mono"><b>'+money(sum)+'</b></td></tr></tfoot></table></div>'+
+    '<div class="bar">'+
+      '<button class="pri" id="applySpend">Replace '+esc(d.per.short)+' totals</button>'+
+      '<button class="sm" id="addSpend">Add to what is there</button>'+
+      '<button class="ghost" id="cancelSpend">Cancel</button>'+
+      (miss?'<span class="hint" style="color:var(--warn)">'+miss+' row'+(miss===1?" is":"s are")+
+            ' unfiled — pick a section or '+(miss===1?"it":"they")+' will be left out.</span>':"")+'</div>';
+  $$("[data-sc]").forEach(sel=>sel.addEventListener("change",()=>{
+    PENDSPEND.rows[+sel.dataset.sc].cat=sel.value; spendPreview(); }));
+  $("#cancelSpend").addEventListener("click",()=>{
+    PENDSPEND=null; $("#spendPreview").innerHTML=""; $("#spendPaste").value="";
+    const f=$("#spendFile"); if(f) f.value=""; });
+  $("#addSpend").addEventListener("click",()=>applySpend(false));
+  arm($("#applySpend"),()=>applySpend(true));
+}
+
+/* Anything filed somewhere other than where the rules guessed is a lesson —
+   store it against the stripped merchant key so the next import already knows.
+   Only real corrections are kept: re-saving every auto-match would freeze a
+   guess into a rule you never actually agreed with. */
+function applySpend(replace){
+  if(!PENDSPEND) return;
+  const d=PENDSPEND, tot={};
+  let learned=0;
+  d.rows.forEach(r=>{
+    if(!r.cat) return;
+    tot[r.cat]=r2((tot[r.cat]||0)+r.amt);
+    if(r.cat!==r.seed){ S.settings.merchantRules[merchKey(r.desc)]=r.cat; learned++; }});
+  const keys=Object.keys(tot);
+  if(!keys.length) return toast("Nothing filed yet — give each row a section first.");
+  const cur=replace?{}:Object.assign({},S.spend[CUR]||{});
+  keys.forEach(c=>{ const v=r2(num(cur[c])+tot[c]); if(v) cur[c]=v; else delete cur[c]; });
+  S.spend[CUR]=cur;
+  PENDSPEND=null; save(); renderSpend();
+  toast((replace?"Replaced ":"Added to ")+d.per.short+" — "+money0(Object.keys(cur).reduce((a,k)=>a+num(cur[k]),0))+
+        " across "+keys.length+" section"+(keys.length===1?"":"s")+
+        (learned?", and remembered "+learned+" merchant"+(learned===1?"":"s")+".":"."));
+}
+
+function doSpendImport(){
+  const txt=($("#spendPaste").value||"").trim();
+  if(!txt) return toast("Choose the Chase file, or paste it into the box.");
+  const res=parseChase(txt);
+  if(res.err){ PENDSPEND=null; $("#spendPreview").innerHTML='<p class="hint" style="color:var(--neg)">'+esc(res.err)+'</p>'; return; }
+  PENDSPEND=res; spendPreview();
+}
+
 /* ---- SPEND (totals per section, no line items) ---- */
 function renderSpend(){
   const p=PERIODS.find(x=>x.id===CUR), t=totals(CUR), cur=spendOf(CUR);
@@ -1288,6 +1462,19 @@ function renderSpend(){
     </div>
 
     <div class="card">
+      <h2>Import from Chase</h2>
+      <p class="sub">Download the activity export from Chase and drop the file in. It files each charge into a
+        section, nets refunds off, leaves out your card payments, and keeps only what falls inside
+        ${esc(p.short)} — you review every row before anything is written.</p>
+      <div class="bar">
+        <input type="file" id="spendFile" accept=".csv,text/csv">
+        <button class="pri" id="doSpendImport">Preview import</button>
+      </div>
+      <details style="margin-top:.5rem"><summary class="hint" style="cursor:pointer">or paste the rows instead</summary>
+        <textarea id="spendPaste" rows="4" placeholder="Card,Transaction Date,Post Date,Description,Category,Type,Amount,Memo…" style="width:100%;margin-top:.4rem"></textarea>
+      </details>
+      <div id="spendPreview"></div></div>
+    <div class="card">
       <h2>What you spent, by section</h2>
       <p class="sub">One number per section for this pay period — the same shape as the old sheet. Your real transactions live in Chase and QuickBooks; this is just the totals so net income is right.</p>
       ${cats.map(c=>`<div class="spendrow">
@@ -1319,6 +1506,14 @@ function renderSpend(){
     const prev=S.spend[PERIODS[i-1].id];
     if(!prev||!Object.keys(prev).length) return toast("Nothing in the previous period.");
     S.spend[CUR]=Object.assign({},prev); save(); renderSpend(); toast("Copied from "+PERIODS[i-1].id+" — now adjust it.");});
+  const pf=$("#spendFile");
+  if(pf) pf.addEventListener("change",()=>{
+    const f=pf.files&&pf.files[0]; if(!f) return;
+    const rd=new FileReader();
+    rd.onload=()=>{ $("#spendPaste").value=rd.result; doSpendImport(); };
+    rd.onerror=()=>toast("Could not read that file.");
+    rd.readAsText(f); });
+  $("#doSpendImport").addEventListener("click",doSpendImport);
 }
 
 
