@@ -1118,7 +1118,11 @@ function prevCalc(){
   const solo=techs.length===1;
   const parts=techs.map(n=>n+" "+pct(rateFor(n,solo))+" = "+money(r2(price*rateFor(n,solo))));
   const tot=techs.reduce((a,n)=>a+rateFor(n,solo),0);
-  el.innerHTML=(solo?'<span class="pill solo">solo</span> ':"")+esc(parts.join("  ·  "))+"  ·  labor "+pct(tot);
+  /* Name the bonus, not a number. "solo" alone reads as a flat rate, and the
+     rate genuinely differs by person — a Team Lead alone earns 40%, a
+     Technician alone earns 37.5%. */
+  el.innerHTML=(solo?'<span class="pill solo">solo +'+pct(S.settings.rates.soloBonus)+' each</span> ':"")
+    +esc(parts.join("  ·  "))+"  ·  labor "+pct(tot);
 }
 /* Pick ONE delimiter. Accepting both a tab and a comma looks forgiving and is
    actively dangerous: a sheet pastes as tab-separated, and a price of $1,055.00
