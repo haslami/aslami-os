@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Matrix Crew</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#06090c" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Matrix Crew" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="robots" content="noindex, nofollow" />
+
+<script>
+/* ============================================================
+   EDIT HERE — this is the only part you ever need to change.
+   Paste the real link between the quotes. Leave "" to grey a tile out.
+   Order in this list = order on the screen.
+   ============================================================ */
+var TILES = [
+  { label: "Job Form",          note: "Log a finished job",        icon: "form",
+    url: "https://docs.google.com/forms/d/e/1FAIpQLSes510WcPqZY1ZyVKu_LAvVZYNd7m5_ki8ykyCAFkV0y3oriQ/viewform" },
+
+  { label: "Book / Quote",      note: "Prices + book a customer",  icon: "calendar",
+    url: "https://links.rapidreachads.com/booking/matrix-mobile-details-booking" },
+
+  { label: "Leave a Review",    note: "Show this to the customer", icon: "star", type: "qr",
+    url: "https://g.page/r/Cfv-1owHJlJvEBM/review?utm_source=gbp&utm_medium=reviews&utm_campaign=qr" },
+
+  { label: "Membership",        note: "Plans + what members get",  icon: "card",
+    url: "https://matrixmobiledetails.com/membership" },
+
+  { label: "Member Rate",       note: "Work out their price",      icon: "calc",
+    url: "https://matrixmobiledetails.com/membership?v=coupe&s=standard&f=monthly&c=no&n=1" },
+
+  { label: "Maintenance SOP",   note: "How we run a maintenance",  icon: "wrench",
+    url: "maintenance-sop.pdf" },
+
+  { label: "Stocking SOP",      note: "Restocking the van",        icon: "box",
+    url: "inventory-stocking-sop.pdf" },
+
+  { label: "Handbook",          note: "Rules and how we work",     icon: "shield",
+    url: "field-handbook.pdf" }
+];
+/* ========================= END EDIT ========================= */
+</script>
+
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    background:#06090c;color:#e8f3ec;-webkit-font-smoothing:antialiased;
+    min-height:100vh;padding:0 0 calc(28px + env(safe-area-inset-bottom));
+    -webkit-tap-highlight-color:transparent;
+  }
+
+  header{
+    padding:calc(26px + env(safe-area-inset-top)) 20px 22px;
+    display:flex;align-items:center;gap:13px;
+  }
+  header img{width:42px;height:42px;border-radius:10px;flex:none}
+  .brand b{display:block;font-size:17px;font-weight:700;letter-spacing:.2px;line-height:1.2}
+  .brand span{display:block;font-size:12px;color:#8aa395;letter-spacing:.7px;text-transform:uppercase;margin-top:3px}
+
+  main{padding:0 16px;display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:560px;margin:0 auto}
+
+  .tile{
+    display:flex;flex-direction:column;gap:9px;
+    background:#0d1512;border:1px solid rgba(212,175,55,.16);border-radius:16px;
+    padding:17px 15px 15px;min-height:124px;
+    color:inherit;text-decoration:none;
+    transition:transform .12s ease,border-color .12s ease,background .12s ease;
+  }
+  .tile:active{transform:scale(.97);border-color:#1fc56a;background:#101a16}
+  .tile .ico{width:26px;height:26px;color:#1fc56a;flex:none}
+  .tile b{font-size:15.5px;font-weight:650;line-height:1.25;letter-spacing:.1px}
+  .tile span{font-size:12px;color:#8aa395;line-height:1.35;margin-top:-3px}
+
+  /* the review tile is the one you hand to a customer — make it read differently */
+  .tile.qr{border-color:rgba(212,175,55,.42);background:#141109}
+  .tile.qr .ico{color:#d4af37}
+  .tile.qr:active{border-color:#d4af37;background:#1a1509}
+
+  .tile.off{opacity:.34;pointer-events:none}
+  .tile.off .ico{color:#8aa395}
+  .tile.off span{color:#6b8073}
+
+  footer{text-align:center;color:#4e6157;font-size:11.5px;padding:26px 20px 0;letter-spacing:.3px}
+
+  /* full-screen QR for the customer to scan */
+  .sheet{
+    position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:99;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:26px;
+  }
+  .sheet[hidden]{display:none}
+  .sheet .card{background:#fff;padding:20px;border-radius:18px;line-height:0}
+  .sheet .card img{width:min(74vw,320px);height:min(74vw,320px);object-fit:contain;display:block}
+  .sheet p{color:#e8f3ec;font-size:17px;font-weight:600;text-align:center;letter-spacing:.2px}
+  .sheet small{color:#8aa395;font-size:13px}
+
+  @media(min-width:520px){ main{grid-template-columns:1fr 1fr 1fr} }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="icon-192.png" alt="" />
+  <div class="brand">
+    <b>Matrix Mobile Details</b>
+    <span>Crew</span>
+  </div>
+</header>
+
+<main id="grid"></main>
+
+<footer>Tap the star tile and hold the phone up for the customer to scan.</footer>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="card"><img id="qrimg" src="review-qr.png" alt="Review QR code" /></div>
+  <p>Scan to leave us a review</p>
+  <small>Tap anywhere to close</small>
+</div>
+
+<script>
+var ICONS = {
+  form:     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  star:     '<path d="M12 2.6l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5-5.8-3-5.8 3 1.1-6.5L2.6 9.4l6.5-.9z"/>',
+  card:     '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/>',
+  calc:     '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8"/><path d="M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8"/>',
+  book:     '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  shield:   '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  wrench:   '<path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4l-2.6 2.6 2.1 2.1 2.6-2.6a4 4 0 0 1-5.1-5.1z"/>',
+  box:      '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>'
+};
+
+function svg(name){
+  return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+         'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+         (ICONS[name] || ICONS.form) + '</svg>';
+}
+
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+var grid  = document.getElementById('grid');
+var sheet = document.getElementById('sheet');
+
+TILES.forEach(function(t){
+  var live = !!t.url;
+  var isQr = t.type === 'qr';
+  var cls  = 'tile' + (isQr ? ' qr' : '') + (live ? '' : ' off');
+  var body = svg(t.icon) + '<b>' + esc(t.label) + '</b>' +
+             '<span>' + esc(live ? (t.note || '') : 'Ask Habib — not set up yet') + '</span>';
+  var el;
+
+  if (live && isQr) {
+    el = document.createElement('button');
+    el.type = 'button';
+    el.onclick = function(){ sheet.hidden = false; };
+  } else if (live) {
+    el = document.createElement('a');
+    el.href = t.url;
+    el.target = '_blank';
+    el.rel = 'noopener';
+  } else {
+    el = document.createElement('div');
+  }
+
+  el.className = cls;
+  el.innerHTML = body;
+  grid.appendChild(el);
+});
+
+sheet.onclick = function(){ sheet.hidden = true; };
+</script>
+
+</body>
+</html>
