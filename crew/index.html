@@ -19,6 +19,9 @@
    EDIT HERE — this is the only part you ever need to change.
    Paste the real link between the quotes. Leave "" to grey a tile out.
    Order in this list = order on the screen.
+
+   QR tiles: add  qr: true  and the tile shows a QR of its link for the
+   customer to scan, instead of opening it. qrText is the line under the code.
    ============================================================ */
 var TILES = [
   { label: "Job Form",          note: "Log a finished job",        icon: "form",
@@ -27,7 +30,8 @@ var TILES = [
   { label: "Book / Quote",      note: "Prices + book a customer",  icon: "calendar",
     url: "https://links.rapidreachads.com/booking/matrix-mobile-details-booking" },
 
-  { label: "Leave a Review",    note: "Show this to the customer", icon: "star", type: "qr",
+  { label: "Leave a Review",    note: "Show this to the customer", icon: "star",
+    qr: true, qrText: "Scan to leave us a review",
     url: "https://g.page/r/Cfv-1owHJlJvEBM/review?utm_source=gbp&utm_medium=reviews&utm_campaign=qr" },
 
   { label: "Membership",        note: "Plans + what members get",  icon: "card",
@@ -76,6 +80,7 @@ var TILES = [
     transition:transform .12s ease,border-color .12s ease,background .12s ease;
   }
   .tile:active{transform:scale(.97);border-color:#1fc56a;background:#101a16}
+  button.tile{font:inherit;text-align:left;width:100%;cursor:pointer;-webkit-appearance:none;appearance:none}
   .tile .ico{width:26px;height:26px;color:#1fc56a;flex:none}
   .tile b{font-size:15.5px;font-weight:650;line-height:1.25;letter-spacing:.1px}
   .tile span{font-size:12px;color:#8aa395;line-height:1.35;margin-top:-3px}
@@ -97,9 +102,10 @@ var TILES = [
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:26px;
   }
   .sheet[hidden]{display:none}
-  .sheet .card{background:#fff;padding:20px;border-radius:18px;line-height:0}
-  .sheet .card img{width:min(74vw,320px);height:min(74vw,320px);object-fit:contain;display:block}
+  .sheet .card{background:#fff;padding:8px;border-radius:18px;line-height:0}
+  .sheet .card svg{width:min(78vw,340px);height:min(78vw,340px);display:block}
   .sheet p{color:#e8f3ec;font-size:17px;font-weight:600;text-align:center;letter-spacing:.2px}
+  .sheet a{color:#1fc56a;font-size:14px;text-decoration:none;padding:6px 10px}
   .sheet small{color:#8aa395;font-size:13px}
 
   @media(min-width:520px){ main{grid-template-columns:1fr 1fr 1fr} }
@@ -117,14 +123,16 @@ var TILES = [
 
 <main id="grid"></main>
 
-<footer>Tap the star tile and hold the phone up for the customer to scan.</footer>
+<footer>Gold tiles show a QR code — hold the phone up for the customer to scan.</footer>
 
 <div class="sheet" id="sheet" hidden>
-  <div class="card"><img id="qrimg" src="review-qr.png" alt="Review QR code" /></div>
-  <p>Scan to leave us a review</p>
+  <div class="card" id="qrcard"></div>
+  <p id="qrtext"></p>
+  <a id="qrlink" target="_blank" rel="noopener">Open the link instead</a>
   <small>Tap anywhere to close</small>
 </div>
 
+<script src="qrcode.js"></script>
 <script>
 var ICONS = {
   form:     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/>',
@@ -148,12 +156,36 @@ function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Draws the QR as crisp SVG squares with the standard 4-module white margin.
+function qrSvg(text){
+  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+  var q = qrcode(0, 'M');
+  q.addData(text);
+  q.make();
+  var n = q.getModuleCount(), m = 4, size = n + m * 2, d = '';
+  for (var y = 0; y < n; y++) {
+    for (var x = 0; x < n; x++) {
+      if (q.isDark(y, x)) d += 'M' + (x + m) + ' ' + (y + m) + 'h1v1h-1z';
+    }
+  }
+  return '<svg viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges">' +
+         '<rect width="' + size + '" height="' + size + '" fill="#fff"/>' +
+         '<path d="' + d + '" fill="#000"/></svg>';
+}
+
 var grid  = document.getElementById('grid');
 var sheet = document.getElementById('sheet');
 
+function showQr(t){
+  document.getElementById('qrcard').innerHTML = qrSvg(t.url);
+  document.getElementById('qrtext').textContent = t.qrText || 'Scan with your phone camera';
+  document.getElementById('qrlink').href = t.url;
+  sheet.hidden = false;
+}
+
 TILES.forEach(function(t){
   var live = !!t.url;
-  var isQr = t.type === 'qr';
+  var isQr = !!t.qr && typeof qrcode === 'function';
   var cls  = 'tile' + (isQr ? ' qr' : '') + (live ? '' : ' off');
   var body = svg(t.icon) + '<b>' + esc(t.label) + '</b>' +
              '<span>' + esc(live ? (t.note || '') : 'Ask Habib — not set up yet') + '</span>';
@@ -162,7 +194,7 @@ TILES.forEach(function(t){
   if (live && isQr) {
     el = document.createElement('button');
     el.type = 'button';
-    el.onclick = function(){ sheet.hidden = false; };
+    el.onclick = function(){ showQr(t); };
   } else if (live) {
     el = document.createElement('a');
     el.href = t.url;
