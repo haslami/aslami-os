@@ -34,6 +34,10 @@ var TILES = [
     qr: true, qrText: "Scan to leave us a review",
     url: "https://g.page/r/Cfv-1owHJlJvEBM/review?utm_source=gbp&utm_medium=reviews&utm_campaign=qr" },
 
+  { label: "Pay with Venmo",    note: "Customer scans to pay",     icon: "pay",
+    qr: true, qrText: "Scan to pay on Venmo — @haslami",
+    url: "https://venmo.com/code?user_id=4046351780284243024&created=1789501384.142967" },
+
   { label: "Membership",        note: "Plans + what members get",  icon: "card",
     url: "https://matrixmobiledetails.com/membership" },
 
@@ -143,7 +147,8 @@ var ICONS = {
   book:     '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   shield:   '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   wrench:   '<path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 1 5.4-5.4l-2.6 2.6 2.1 2.1 2.6-2.6a4 4 0 0 1-5.1-5.1z"/>',
-  box:      '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>'
+  box:      '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/>',
+  pay:      '<circle cx="12" cy="12" r="10"/><path d="M15 9.2c-.5-.9-1.6-1.5-3-1.5-1.7 0-2.9.9-2.9 2.1 0 2.9 6 1.6 6 4.5 0 1.3-1.3 2.3-3.1 2.3-1.4 0-2.6-.6-3.1-1.6"/><path d="M12 5.8v1.9M12 16.6v1.6"/>'
 };
 
 function svg(name){
