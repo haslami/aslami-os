@@ -253,7 +253,7 @@ const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]
 
 /* ---------------- state ---------------- */
 function blank(){return{
-  v:12, savedAt:0,
+  v:14, savedAt:0,
   settings:{
     rates:{owner:.35,team:.25,junior:.225,soloBonus:.15,tax:.0765,minWage:13.75},
     dist:{Habib:.175,Ryan:.175,"Savings / Tax":.25,Checking:.40},
@@ -264,7 +264,7 @@ function blank(){return{
        it hides them from the job pickers but keeps their rate intact. */
     techs:[{name:"Habib",role:"Owner",active:true},{name:"Ryan",role:"Owner",active:true},
            {name:"Mikey",role:"Team Lead",active:true},{name:"Gannon",role:"Team Lead",active:false},
-           {name:"Christian",role:"Technician",active:true},
+           {name:"Christian",role:"Technician",active:false},
            {name:"Hayden",role:"Technician",active:false}],
     services:["Basic","Standard","Premium","Deluxe","Exterior Only","Ceramic Coating","Add-on","Cancellation Fee","Other"],
     methods:["Card (MO)","Card (KS)","Cash","Venmo","Check (written to bus.)","Check (written to Habib)","Check","Zelle","Stripe (online)","Other"],
@@ -345,6 +345,11 @@ function migrate_(st){
      merchant->section lessons it learns have to live in settings so they sync
      to every device instead of being relearned on each one. */
   try{ if((st.v||0)<13){ st.settings.merchantRules=st.settings.merchantRules||{}; st.v=13; } }catch(e){}
+  /* v14: Christian has left. Deactivated like Gannon and Hayden, never deleted —
+     his last period, the ARCO day included, still has to compute. */
+  try{ if((st.v||0)<14){
+    (st.settings.techs||[]).forEach(function(t){ if(t.name==="Christian") t.active=false; });
+    st.v=14; } }catch(e){}
   /* belt and braces: a rate or setting must never be undefined, whatever the
      version says, because an undefined rate pays somebody the wrong amount. */
   try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
