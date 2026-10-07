@@ -690,6 +690,24 @@ function lockPastRates_(){
   const snap={}; RATE_KEYS.forEach(k=>snap[k]=S.settings.rates[k]);
   H.push({to:to, rates:snap});
 }
+/* Where a job's tip money ended up.
+     "split"   cash the crew divided on the job. They already have it: it never
+               reaches the drawer and never goes on a paycheck.
+     "drawer"  cash they couldn't split. It's with the business now, so it counts
+               as cash in hand, and it's paid out to them on their paycheck.
+     "payment" it came with the payment, so it's cash only if the job was paid
+               in cash; on a card or Venmo job it settled to the bank.
+   Before 7 Oct 2026 the form only asked "Cash tip split?" Yes/No, so a cash tip
+   on a CARD job that went in the drawer looked exactly like a card tip, and the
+   drawer count missed it. Old jobs carry no tipHow: tipCash still means split,
+   and an unsplit tip follows the payment method — exactly what they did before. */
+const tipHowOf=j=>j.tipHow||(j.tipCash?"split":"payment");
+const tipInDrawer=j=>{const h=tipHowOf(j);
+  return h==="drawer"||(h==="payment"&&S.settings.cashMethods.indexOf(j.payment)>-1);};
+const parseTipHow=v=>{v=String(v==null?"":v).trim();
+  if(/drawer/i.test(v)) return "drawer";              // first: "couldn't split it" also says split
+  if(/split|^y(es)?$|^true$|^1$/i.test(v)) return "split";
+  return "payment";};
 function lines(j){
   const techs=(j.techs||[]).filter(Boolean), crew=techs.length; if(!crew) return [];
   const solo=crew===1, done=j.status==="Completed";
@@ -773,10 +791,13 @@ function totals(p){
      settles like a Missouri card, not as cash and not as whatever they hand over
      on the driveway — so the payment method describes only the BALANCE. */
   const deposits=r2(done.reduce((a,j)=>a+num(j.deposit),0));
-  /* Cash in hand, available to pay owners. A tip the crew split themselves never
-     reached the till, and neither did a deposit already paid online. */
+  /* Cash in hand, available to pay owners: the balance of every job paid in
+     cash (less any deposit already paid online), plus every cash tip that went
+     in the drawer — on a cash job OR a card/Venmo job. A tip the crew split
+     themselves never reached the drawer. See tipInDrawer(). */
   const cashIn=r2(done.filter(j=>S.settings.cashMethods.indexOf(j.payment)>-1)
-    .reduce((a,j)=>a+Math.max(0,num(j.price)-num(j.deposit))+(j.tipCash?0:num(j.tip)),0));
+      .reduce((a,j)=>a+Math.max(0,num(j.price)-num(j.deposit)),0)
+    + done.reduce((a,j)=>a+(tipInDrawer(j)?num(j.tip):0),0));
   /* Kansas sales tax follows where the WORK happened, not how it was paid. The
      deposit stays in the Kansas base even though Stripe settles like a Missouri
      card — dropping it here would quietly under-reserve the tax. */
@@ -876,7 +897,7 @@ function renderPeriod(){
         ${t.jobs?`<span>${t.jobs} jobs · ${t.solo} solo</span>`:""}</div></div>
     <div class="kpis">
       ${kpi("Job revenue",money0(t.revenue),"tips excluded")}
-      ${kpi("In hand",money0(t.cashIn),"cash + cheques to you — pays owners first","cash")}
+      ${kpi("In hand",money0(t.cashIn),"cash, cheques to you, drawer tips — pays owners first","cash")}
       ${t.deposits?kpi("Online deposits",money0(t.deposits),"taken on Stripe up front","cash"):""}
       ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
       ${kpi("Employee wages",money0(t.empWages),"through QuickBooks")}
@@ -961,7 +982,7 @@ function renderMoves(){
       "The rest of their "+money(s.earned)+" work pay, after what they already hold. This part leaves the business account, which is what the income tax reserve is calculated on.",s.transfer)).join("");
   $("#v-moves").innerHTML=`
     <div class="kpis">
-      ${kpi("In hand",money0(t.cashIn),"cash + cheques to you, deposits excluded","cash")}
+      ${kpi("In hand",money0(t.cashIn),"cash, cheques to you, drawer tips; deposits excluded","cash")}
       ${t.deposits?kpi("Online deposits",money0(t.deposits),"already in the bank via Stripe","cash"):""}
       ${kpi("Owner work pay",money0(P.ownerPay),"Habib + Ryan")}
       ${kpi("Covered by cash",money0(P.cashToOwners),P.ownerPay?pct(P.cashToOwners/P.ownerPay)+" of owner pay":"","cash")}
@@ -1127,9 +1148,10 @@ function renderJobs(){
         <div class="f"><label>Service</label><select id="jsv">${opts(s.services,"Standard")}</select></div>
         <div class="f"><label>Price (no tip)</label><input id="jp" type="number" min="0" step="1"></div>
         <div class="f"><label>Tip</label><input id="jt" type="number" min="0" step="1"></div>
-        <div class="f"><label>Cash tip, split on the job?</label>
-          <label style="display:flex;gap:.4rem;align-items:center;font-size:.85rem;padding:.3rem 0">
-            <input type="checkbox" id="jtc"> already handed over</label></div>
+        <div class="f"><label>How was the tip paid?</label><select id="jth">
+          <option value="payment">With the payment</option>
+          <option value="split">Cash, split on the job</option>
+          <option value="drawer">Cash, in the drawer</option></select></div>
         <div class="f"><label>Payment <span class="hint">of the balance</span></label><select id="jm">${opts(s.methods,"Card (MO)")}</select></div>
         <div class="f"><label>Online deposit</label>
           <label style="display:flex;gap:.4rem;align-items:center;font-size:.85rem;padding:.3rem 0">
@@ -1158,7 +1180,7 @@ function renderJobs(){
   $("#addJob").addEventListener("click",()=>{
     const d=$("#jd").value; if(!d) return toast("A job needs a date.");
     S.jobs.push({id:uid(),date:d,customer:$("#jc").value||"—",service:$("#jsv").value,price:num($("#jp").value),
-      tip:num($("#jt").value),tipCash:!!($("#jtc")&&$("#jtc").checked),
+      tip:num($("#jt").value),tipHow:($("#jth")&&$("#jth").value)||"payment",tipCash:!!($("#jth")&&$("#jth").value==="split"),
       deposit:($("#jdep")&&$("#jdep").checked)?(num(S.settings.depositAmount)||50):0,
       payment:$("#jm").value,status:"Completed",
       techs:[$("#j1").value,$("#j2").value,$("#j3").value].filter(Boolean),adj:[0,0,0],hours:num($("#jh").value),notes:""});
@@ -1216,7 +1238,7 @@ function parseImport(txt){
     iRev=find("job revenue"), iPkg=find("package $","package price"), iUpch=find("condition upcharge","upcharge"),
     iUps=find("upsell total","upsell $"), iTicket=find("ticket total"), iTip=find("tip"),
     iPay=find("payment type","payment"), iT1=find("tech 1"), iT2=find("tech 2"), iT3=find("tech 3"),
-    iTipCash=find("cash tip split?","cash tip split","tip split in cash","cash tip"),
+    iTipCash=find("how was the tip paid?","how was the tip paid","cash tip split?","cash tip split","tip split in cash","cash tip"),
     iDep=find("online deposit","deposit","stripe deposit","deposit paid"),
     iHrs=find("hours","hours duration"), iNotes=find("notes");
   const out=[],warn=[];
@@ -1232,8 +1254,11 @@ function parseImport(txt){
     else if(iTicket>-1) price=num(row[iTicket])-tip; else price=0;
     out.push({id:uid(),date,customer:(iCust>-1?row[iCust]:"")||"—",service:(iSvc>-1?row[iSvc]:"")||"Other",
       price:r2(price),tip:r2(tip),
-      /* Yes = the crew split that tip in cash on the job. Already paid, keep it out of the pay run. */
-      tipCash:iTipCash>-1 && /^(y|true|1)/i.test(String(row[iTipCash]||"").trim()),
+      /* "How was the tip paid?" (or the old "Cash tip split?" Yes/No). Split = the
+         crew already has it, so keep it out of the pay run; drawer = cash the
+         business holds and pays out on the paycheck. See tipInDrawer(). */
+      tipHow:iTipCash>-1?parseTipHow(row[iTipCash]):"payment",
+      tipCash:iTipCash>-1 && parseTipHow(row[iTipCash])==="split",
       /* The column may be a Yes/No or the amount itself. "Yes" means the standard
          online deposit; a number means that exact amount. */
       deposit:(function(){ if(iDep<0) return 0;
@@ -1707,7 +1732,7 @@ function renderYear(){
         panel disappears and the year total means one thing again.</p></div>`:""}
     <div class="kpis">
       ${kpi("Owner work pay",money0(y.own),"Habib + Ryan, YTD")}
-      ${kpi("In hand",money0(y.cash),"cash + cheques to you, YTD","cash")}
+      ${kpi("In hand",money0(y.cash),"cash, cheques to you, drawer tips, YTD","cash")}
       ${kpi("Kansas sales",money0(y.ks),"YTD")}
       ${kpi("Set aside to savings",money0(y.sav),"income + KS sales tax","pos")}
       ${kpi("Hours logged",r2(y.hrs)||"—","across the crew")}
