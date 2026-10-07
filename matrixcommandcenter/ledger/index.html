@@ -230,6 +230,7 @@ const PERIODS=(()=>{const o=[];for(let i=0;i<27;i++){const s=ANCHOR+i*14*DAY,e=s
 const toUTC=iso=>{const p=String(iso).split("-").map(Number);return Date.UTC(p[0],(p[1]||1)-1,p[2]||1);};
 const periodOf=iso=>{const t=toUTC(iso);return PERIODS.find(p=>t>=p.start&&t<=p.end)||null;};
 const fmtD=iso=>{const p=String(iso).split("-");return (+p[1])+"/"+(+p[2]);};
+const fmtLong=iso=>{const p=String(iso).split("-");return (+p[2])+" "+MN[(+p[1])-1]+" "+p[0];};
 const todayISO=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");};
 /* Every pay period from the ORIGINAL "Matrix Finances" workbook, read straight
  * out of it on 24 Aug 2026. These are the real figures Habib has been running on:
@@ -253,9 +254,11 @@ const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]
 
 /* ---------------- state ---------------- */
 function blank(){return{
-  v:14, savedAt:0,
+  v:15, savedAt:0,
   settings:{
-    rates:{owner:.35,team:.25,junior:.225,soloBonus:.15,tax:.0765,minWage:13.75},
+    rates:{owner:.35,team:.225,junior:.20,soloBonus:.15,tax:.0765,minWage:15},
+    /* see ratesOn(): what applied up to and including each date */
+    rateHistory:[{to:"2026-10-04",rates:{owner:.35,team:.25,junior:.225,soloBonus:.15}}],
     dist:{Habib:.175,Ryan:.175,"Savings / Tax":.25,Checking:.40},
     reserve:{incomeTax:.20, ksSalesTax:.10, taxBase:"transfer"},  // transfer | draws
     /* A name stays on this list forever once somebody has worked a job under it.
@@ -350,11 +353,27 @@ function migrate_(st){
   try{ if((st.v||0)<14){
     (st.settings.techs||[]).forEach(function(t){ if(t.name==="Christian") t.active=false; });
     st.v=14; } }catch(e){}
+  /* v15: rates get a start date. Everything up to 4 Oct 2026 was paid at the old
+     rates (Team Lead 25%, Technician 22.5%); the cut to 22.5% / 20% applies from
+     the pay period that began 5 Oct, the day Mikey was told. Without this, the
+     cut recomputed every period he had already been paid at 25%.
+     Christian had been switched to Team Lead as a stand-in, so his history kept
+     paying the 22.5% he really got. With history in place, Team Lead would pay
+     his old periods 25%, so he goes back to Technician, which is 22.5% before
+     5 Oct. Missouri's minimum wage is $15.00 for 2026, not $13.75. */
+  try{ if((st.v||0)<15){
+    if(!Array.isArray(st.settings.rateHistory)) st.settings.rateHistory=[{to:"2026-10-04",
+      rates:{owner:.35,team:.25,junior:.225,soloBonus:.15}}];
+    (st.settings.techs||[]).forEach(function(t){
+      if(t.name==="Christian" && t.role==="Team Lead") t.role="Technician"; });
+    if(st.settings.rates.minWage===13.75) st.settings.rates.minWage=15;
+    st.v=15; } }catch(e){}
   /* belt and braces: a rate or setting must never be undefined, whatever the
      version says, because an undefined rate pays somebody the wrong amount. */
   try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
   try{ if(st.settings.depositAmount===undefined) st.settings.depositAmount=50; }catch(e){}
   try{ if(!st.settings.merchantRules) st.settings.merchantRules={}; }catch(e){}
+  try{ if(!Array.isArray(st.settings.rateHistory)) st.settings.rateHistory=[]; }catch(e){}
   if(!st.extras) st.extras={};
   return st;
 }
@@ -643,16 +662,39 @@ const ROLE_RATE={Owner:"owner","Team Lead":"team",Technician:"junior",
 /* NOT r2() — that rounds to two decimals, which is right for dollars and wrong
    for a rate: 22.5% + 15% would land on 38% instead of 37.5%. Six decimals keeps
    the half-percent and still kills floating-point dust. */
-const rateFor=(n,solo)=>Math.round((baseRate(n)+(solo?(S.settings.rates.soloBonus||0):0))*1e6)/1e6;
+const rateFor=(n,solo,date)=>Math.round((baseRate(n,date)+(solo?(ratesOn(date).soloBonus||0):0))*1e6)/1e6;
 const techRole=n=>{const t=S.settings.techs.find(x=>x.name===n);return t?t.role:null;};
 const isOwner=n=>techRole(n)==="Owner";
-const baseRate=n=>{const r=S.settings.rates,ro=techRole(n);
+const baseRate=(n,date)=>{const r=ratesOn(date),ro=techRole(n);
   var k=ROLE_RATE[ro]; return k?r[k]:0;};
+/* A job is paid at the rates in force on ITS date, not today's. Cutting Team
+   Lead from 25% to 22.5% on 5 Oct 2026 used to recompute every period Mikey had
+   already been paid at 25% — the ledger showed less than he actually got, and
+   every past net income came out too high. settings.rateHistory holds the rates
+   that applied up to and including each `to` date, oldest first; settings.rates
+   applies after the last one. No date = today's rates (Setup, previews). */
+const RATE_KEYS=["owner","team","junior","soloBonus"];
+function ratesOn(date){
+  const H=S.settings.rateHistory||[], r=S.settings.rates;
+  if(date) for(let i=0;i<H.length;i++) if(String(date)<=H[i].to) return Object.assign({},r,H[i].rates);
+  return r;
+}
+/* Before a commission rate changes in Setup, freeze what applied up to the end
+   of the previous pay period. The change then starts with the CURRENT period and
+   no period that has already been paid moves. A second change in the same
+   period freezes nothing new: the first snapshot is the one people were paid on. */
+function lockPastRates_(){
+  const cur=periodOf(todayISO()); if(!cur) return;
+  const to=isoOf(cur.start-DAY), H=S.settings.rateHistory||(S.settings.rateHistory=[]);
+  if(H.length && H[H.length-1].to>=to) return;
+  const snap={}; RATE_KEYS.forEach(k=>snap[k]=S.settings.rates[k]);
+  H.push({to:to, rates:snap});
+}
 function lines(j){
   const techs=(j.techs||[]).filter(Boolean), crew=techs.length; if(!crew) return [];
   const solo=crew===1, done=j.status==="Completed";
   return techs.map((name,i)=>{
-    const rate=rateFor(name,solo);
+    const rate=rateFor(name,solo,j.date);
     return {job:j,name,crew,solo,rate,comm:done?r2(num(j.price)*rate):0,
       tip:r2(num(j.tip)/crew), tipCash:!!j.tipCash,
       adj:(j.adj&&j.adj[i])||0, hours:num(j.hours)};
@@ -1130,8 +1172,9 @@ function prevCalc(){
   if(!el) return;
   if(!techs.length){el.textContent="No tech yet — nobody gets paid for this job.";return;}
   const solo=techs.length===1;
-  const parts=techs.map(n=>n+" "+pct(rateFor(n,solo))+" = "+money(r2(price*rateFor(n,solo))));
-  const tot=techs.reduce((a,n)=>a+rateFor(n,solo),0);
+  const jd=$("#jd")?$("#jd").value:"";
+  const parts=techs.map(n=>n+" "+pct(rateFor(n,solo,jd))+" = "+money(r2(price*rateFor(n,solo,jd))));
+  const tot=techs.reduce((a,n)=>a+rateFor(n,solo,jd),0);
   /* Name the bonus, not a number. "solo" alone reads as a flat rate, and the
      rate genuinely differs by person — a Team Lead alone earns 40%, a
      Technician alone earns 37.5%. */
@@ -1774,7 +1817,12 @@ function renderSetup(){
         <p class="hint">Two-man rate / solo rate, by role:
           <b>Owner</b> ${pct(r.owner)} → ${pct(r.owner+r.soloBonus)} ·
           <b>Team Lead</b> ${pct(r.team)} → ${pct(r.team+r.soloBonus)} ·
-          <b>Technician</b> ${pct(r.junior)} → ${pct(r.junior+r.soloBonus)}.</p></div>
+          <b>Technician</b> ${pct(r.junior)} → ${pct(r.junior+r.soloBonus)}.</p>
+        ${(S.settings.rateHistory||[]).length?`<p class="hint" style="margin-top:.6rem"><b>Rates have a start date.</b>
+          ${S.settings.rateHistory.map(h=>`Jobs up to <b>${esc(fmtLong(h.to))}</b> pay Team Lead ${pct(h.rates.team)},
+            Technician ${pct(h.rates.junior)}, Owner ${pct(h.rates.owner)}, solo +${pct(h.rates.soloBonus)}.`).join(" ")}
+          The rates above apply after that. A change you make here starts with the current pay period
+          (${esc((periodOf(todayISO())||{}).short||"")}) and never rewrites a period that has already been paid.</p>`:""}</div>
       <div class="card"><h2>Tax reserves</h2>
         <div class="grid">
           <div class="f"><label>Income tax set-aside</label><input type="number" step="1" value="${(rs.incomeTax*100).toFixed(0)}" data-rs="incomeTax"></div>
@@ -1828,7 +1876,12 @@ function renderSetup(){
       </div>
       <p class="hint" id="dataStat" style="margin-top:.7rem"></p></div>`;
   $$("[data-r]").forEach(i=>i.addEventListener("change",()=>{
-    S.settings.rates[i.dataset.r]=i.dataset.u==="%"?num(i.value)/100:num(i.value);save();renderAll();}));
+    const k=i.dataset.r, v=i.dataset.u==="%"?num(i.value)/100:num(i.value);
+    if(RATE_KEYS.indexOf(k)>-1 && v!==S.settings.rates[k]){
+      lockPastRates_();
+      toast("Applies from "+((periodOf(todayISO())||{}).short||"this period")+" on. Earlier periods keep the rate they were paid at.");
+    }
+    S.settings.rates[k]=v;save();renderAll();}));
   $$("[data-rs]").forEach(i=>i.addEventListener("change",()=>{
     S.settings.reserve[i.dataset.rs]=num(i.value)/100;save();renderAll();}));
   $("#taxBase").addEventListener("change",e=>{S.settings.reserve.taxBase=e.target.value;save();renderAll();});
