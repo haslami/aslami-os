@@ -1214,11 +1214,12 @@ function sameName(a,b){
   if(A.length===1||B.length===1) return true;
   return A[A.length-1][0]===B[B.length-1][0];
 }
-/* A completed job whose customer looks like a current member, on or after the day
-   they signed up, that isn't already tied to a member and wasn't waved off. */
+/* A completed job whose customer looks like a current member, AFTER the day
+   they signed up (the job where they said yes is a regular job, not a member
+   detail), that isn't already tied to a member and wasn't waved off. */
 function memberSuggest(j){
   if(j.member||j.status!=="Completed") return null;
-  return activeMembers().find(m=>!m.ended&&sameName(m.customer,j.customer)&&(!m.date||j.date>=m.date)
+  return activeMembers().find(m=>!m.ended&&sameName(m.customer,j.customer)&&(!m.date||j.date>m.date)
     &&(j.notMember||[]).indexOf(m.id)<0)||null;
 }
 /* Same kind of entry, same customer, within 30 days, not denied: probably both
