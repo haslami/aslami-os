@@ -714,6 +714,20 @@ function lockPastRates_(){
 const tipHowOf=j=>j.tipHow||(j.tipCash?"split":"payment");
 const tipInDrawer=j=>{const h=tipHowOf(j);
   return h==="drawer"||(h==="payment"&&S.settings.cashMethods.indexOf(j.payment)>-1);};
+/* A balance paid two ways: Cameron Bahm (17 Oct 2026) paid $100 on the card and
+   $80 in cash after a $50 online deposit. j.payment covers the rest of the
+   balance; j.pay2 = {m, a} is the part paid with a second method. Logged as card
+   it lost $80 of drawer cash; logged as cash it invented $100. */
+const isCashM=m=>S.settings.cashMethods.indexOf(m)>-1, isKSM=m=>S.settings.ksMethods.indexOf(m)>-1;
+const pay2Amt=j=>(j.pay2&&j.pay2.m&&j.pay2.m!==j.payment)?Math.max(0,num(j.pay2.a)):0;
+const mainAmt=j=>Math.max(0,num(j.price)-num(j.deposit)-pay2Amt(j));
+/* Cash that reached the business from this job's price (tips are separate). */
+const cashPart=j=>(isCashM(j.payment)?mainAmt(j):0)+(isCashM((j.pay2||{}).m)?pay2Amt(j):0);
+/* The job's Kansas sales base: the whole price on a Kansas job, deposit included,
+   less any slice paid another way that isn't Kansas. */
+const ksPart=j=>{const p2=pay2Amt(j);
+  if(!p2) return isKSM(j.payment)?num(j.price):0;
+  return (isKSM(j.payment)?num(j.price)-p2:0)+(isKSM(j.pay2.m)?p2:0);};
 const parseTipHow=v=>{v=String(v==null?"":v).trim();
   if(/drawer/i.test(v)) return "drawer";              // first: "couldn't split it" also says split
   if(/split|^y(es)?$|^true$|^1$/i.test(v)) return "split";
@@ -861,13 +875,12 @@ function totals(p){
      cash (less any deposit already paid online), plus every cash tip that went
      in the drawer — on a cash job OR a card/Venmo job. A tip the crew split
      themselves never reached the drawer. See tipInDrawer(). */
-  const cashIn=r2(done.filter(j=>S.settings.cashMethods.indexOf(j.payment)>-1)
-      .reduce((a,j)=>a+Math.max(0,num(j.price)-num(j.deposit)),0)
+  const cashIn=r2(done.reduce((a,j)=>a+cashPart(j),0)
     + done.reduce((a,j)=>a+(tipInDrawer(j)?num(j.tip):0),0));
   /* Kansas sales tax follows where the WORK happened, not how it was paid. The
      deposit stays in the Kansas base even though Stripe settles like a Missouri
      card — dropping it here would quietly under-reserve the tax. */
-  const ksSales=r2(done.filter(j=>S.settings.ksMethods.indexOf(j.payment)>-1).reduce((a,j)=>a+num(j.price),0));
+  const ksSales=r2(done.reduce((a,j)=>a+ksPart(j),0));
   const labor=r2(ownerCost+empCost);
   return {revenue,tips,ownerComm:r2(ownerComm),empComm:r2(empComm),empTips,empAdj,ownerTips,ownerAdj,
     empWages,empTax,empCost,ownerCost,reimb,x:X,deposits,
@@ -1522,6 +1535,9 @@ function renderJobs(){
         <div class="f"><label>Online deposit</label>
           <label style="display:flex;gap:.4rem;align-items:center;font-size:.85rem;padding:.3rem 0">
             <input type="checkbox" id="jdep"> ${money(num(s.depositAmount)||50)} paid on Stripe</label></div>
+        <div class="f"><label>Part paid another way <span class="hint">optional</span></label>
+          <div style="display:flex;gap:.35rem"><select id="jm2" style="flex:1;min-width:0"><option value="">— no split —</option>${opts(s.methods)}</select>
+            <input id="ja2" type="number" min="0" step="1" placeholder="$" style="width:5.5rem" aria-label="Amount paid the other way"></div></div>
         <div class="f"><label>Tech 1</label><select id="j1"><option value=""></option>${opts(tn)}</select></div>
         <div class="f"><label>Tech 2</label><select id="j2"><option value=""></option>${opts(tn)}</select></div>
         <div class="f"><label>Tech 3</label><select id="j3"><option value=""></option>${opts(tn)}</select></div>
@@ -1535,8 +1551,11 @@ function renderJobs(){
         <tbody>${js.map(j=>{const ls=lines(j),lab=ls.reduce((a,l)=>a+l.comm+l.adj,0);
           return `<tr><td>${fmtD(j.date)}</td><td>${esc(j.customer)}</td><td>${esc(j.service)}</td>
           <td class="n">${money0(j.price)}</td><td class="n">${num(j.tip)?money0(j.tip):"—"}</td>
-          <td>${S.settings.cashMethods.indexOf(j.payment)>-1?'<span class="pill cash">cash</span>':
-                S.settings.ksMethods.indexOf(j.payment)>-1?'<span class="pill warn">KS</span>':esc(j.payment)}</td>
+          <td>${pay2Amt(j)?`<span title="${esc(j.payment)} ${money0(mainAmt(j))} + ${esc(j.pay2.m)} ${money0(pay2Amt(j))}${num(j.deposit)?" after a "+money0(j.deposit)+" deposit":""}">${
+                isCashM(j.payment)?'<span class="pill cash">cash</span>':isKSM(j.payment)?'<span class="pill warn">KS</span>':esc(j.payment)} ${money0(mainAmt(j))} +
+                ${isCashM(j.pay2.m)?'<span class="pill cash">cash</span>':isKSM(j.pay2.m)?'<span class="pill warn">KS</span>':esc(j.pay2.m)} ${money0(pay2Amt(j))}</span>`:
+                isCashM(j.payment)?'<span class="pill cash">cash</span>':
+                isKSM(j.payment)?'<span class="pill warn">KS</span>':esc(j.payment)}</td>
           <td>${ls.length?ls.map(l=>esc(l.name)).join(" + "):'<span class="pill mut">none</span>'}${ls.length===1?' <span class="pill solo">solo</span>':""}${j.member&&memberById(j.member)?' <span class="pill pos">member</span>':""}</td>
           <td class="n">${ls.length?[...new Set(ls.map(l=>pct(l.rate)))].join("/"):"—"}</td>
           <td class="n">${money0(lab)}</td><td class="n">${num(j.hours)||"—"}</td>
@@ -1545,11 +1564,21 @@ function renderJobs(){
   ["jp","j1","j2","j3"].forEach(id=>$("#"+id).addEventListener("input",prevCalc)); prevCalc();
   $("#addJob").addEventListener("click",()=>{
     const d=$("#jd").value; if(!d) return toast("A job needs a date.");
-    S.jobs.push({id:uid(),date:d,customer:$("#jc").value||"—",service:$("#jsv").value,price:num($("#jp").value),
+    const job={id:uid(),date:d,customer:$("#jc").value||"—",service:$("#jsv").value,price:num($("#jp").value),
       tip:num($("#jt").value),tipHow:($("#jth")&&$("#jth").value)||"payment",tipCash:!!($("#jth")&&$("#jth").value==="split"),
       deposit:($("#jdep")&&$("#jdep").checked)?(num(S.settings.depositAmount)||50):0,
       payment:$("#jm").value,status:"Completed",
-      techs:[$("#j1").value,$("#j2").value,$("#j3").value].filter(Boolean),adj:[0,0,0],hours:num($("#jh").value),notes:""});
+      techs:[$("#j1").value,$("#j2").value,$("#j3").value].filter(Boolean),adj:[0,0,0],hours:num($("#jh").value),notes:""};
+    /* A balance paid two ways: the second method's share is j.pay2, the main
+       payment method covers whatever is left of the balance. */
+    const m2=($("#jm2")&&$("#jm2").value)||"", a2=num($("#ja2")&&$("#ja2").value);
+    if(m2&&a2>0){
+      const bal=r2(job.price-job.deposit);
+      if(m2===job.payment) return toast("The split part needs a different payment method from the main one.");
+      if(a2>bal) return toast("The split part can't be more than the balance after the deposit ("+money(bal)+").");
+      job.pay2={m:m2,a:r2(a2)};
+    }
+    S.jobs.push(job);
     const pp=periodOf(d); if(pp) CUR=pp.id; const ml=autoLinkMembers();
     save(); fillPeriods(); renderAll(); toast("Job added."+linkedNote(ml));});
   $("#doImport").addEventListener("click",previewImport);
