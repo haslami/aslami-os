@@ -181,6 +181,7 @@ svg.chart{display:block;width:100%;height:auto;min-width:520px}
     <button class="nav" data-v="period" aria-current="true"><i>◧</i>Period</button>
     <button class="nav" data-v="moves"><i>⇄</i>Money moves</button>
     <button class="nav" data-v="payroll"><i>◉</i>Payroll</button>
+    <button class="nav" data-v="incent"><i>★</i>Incentives</button>
     <button class="nav" data-v="jobs"><i>▤</i>Jobs</button>
     <button class="nav" data-v="spend"><i>◈</i>Spend</button>
     <button class="nav" data-v="months"><i>▦</i>Months</button>
@@ -198,6 +199,7 @@ svg.chart{display:block;width:100%;height:auto;min-width:520px}
     <section class="view" id="v-period"></section>
     <section class="view" id="v-moves" hidden></section>
     <section class="view" id="v-payroll" hidden></section>
+    <section class="view" id="v-incent" hidden></section>
     <section class="view" id="v-jobs" hidden></section>
     <section class="view" id="v-spend" hidden></section>
     <section class="view" id="v-months" hidden></section>
@@ -254,7 +256,7 @@ const LEGACY=Object.fromEntries(Object.entries(HISTORY).map(([k,v])=>[k,v.gross]
 
 /* ---------------- state ---------------- */
 function blank(){return{
-  v:15, savedAt:0,
+  v:16, savedAt:0,
   settings:{
     rates:{owner:.35,team:.225,junior:.20,soloBonus:.15,tax:.0765,minWage:15},
     /* see ratesOn(): what applied up to and including each date */
@@ -275,9 +277,10 @@ function blank(){return{
     cashMethods:["Cash","Check (written to Habib)"],
     ksMethods:["Card (KS)"],
     spendCats:["Gas","Supplies","Van","Merch","Food","Ads","Accountant","Insurance","GHL","Other"],
-    merchantRules:{}
+    merchantRules:{},
+    incent:{review:5, memberFirst:.15, memberNext:.05, split:true, onJob:true}
   },
-  jobs:[], spend:{}, moves:{}, submitted:{}, extras:{}
+  jobs:[], spend:{}, moves:{}, submitted:{}, extras:{}, incentives:[]
 };}
 const KEY="matrix-ledger-v3";
 let S=blank(), cloud=null, cloudAt=0, localAt=0;
@@ -368,12 +371,19 @@ function migrate_(st){
       if(t.name==="Christian" && t.role==="Team Lead") t.role="Technician"; });
     if(st.settings.rates.minWage===13.75) st.settings.rates.minWage=15;
     st.v=15; } }catch(e){}
+  /* v16: the incentive program (18 Oct 2026). Reviews and membership sales come in
+     from the crew's Incentive form; nothing pays until it is approved here. */
+  try{ if((st.v||0)<16){
+    if(!Array.isArray(st.incentives)) st.incentives=[];
+    if(!st.settings.incent) st.settings.incent={review:5,memberFirst:.15,memberNext:.05,split:true,onJob:true};
+    st.v=16; } }catch(e){}
   /* belt and braces: a rate or setting must never be undefined, whatever the
      version says, because an undefined rate pays somebody the wrong amount. */
   try{ if(st.settings.rates.soloBonus===undefined) st.settings.rates.soloBonus=0.15; }catch(e){}
   try{ if(st.settings.depositAmount===undefined) st.settings.depositAmount=50; }catch(e){}
   try{ if(!st.settings.merchantRules) st.settings.merchantRules={}; }catch(e){}
   try{ if(!Array.isArray(st.settings.rateHistory)) st.settings.rateHistory=[]; }catch(e){}
+  try{ if(!Array.isArray(st.incentives)) st.incentives=[]; }catch(e){}
   if(!st.extras) st.extras={};
   return st;
 }
@@ -743,6 +753,62 @@ function extrasBy(p){
     else r.bonus+=a;
     r.items.push(e);
   });
+  /* Incentive pay is a bonus in every way that matters: taxable wages, in the
+     QuickBooks gross, employer tax on top. Folding it in HERE means totals(),
+     payroll(), the money plan and the Command Center summary all count it with
+     no second code path. `inc` keeps it separable for display. */
+  const IB=incentivesBy(p);
+  Object.keys(IB).forEach(n=>{
+    const r=by[n]||(by[n]={bonus:0,reimb:0,deduct:0,items:[]});
+    r.bonus+=IB[n].amt; r.inc=r2((r.inc||0)+IB[n].amt); r.incItems=IB[n].items; });
+  return by;
+}
+
+/* ---- INCENTIVES (v16, 18 Oct 2026) ------------------------------------------
+   The crew log what they earned on the Incentive form; the Work Log's
+   "Incentive Log" tab collects it and it is pasted in on the Incentives screen.
+   NOTHING pays until it is approved there.
+     Review          $5 to every employee the logger ticked as on the job. Paid in
+                     the period it was approved into (x.pp), so a review that
+                     arrives after its job's period closed still gets paid.
+     Membership      approving the sale makes them a member; it pays nothing by
+                     itself. Each of that member's details then pays the seller
+                     +15% of the job (first detail) or +5% (every one after), in
+                     the period of that detail. The job is tied to the member by
+                     j.member, confirmed by Habib on the Incentives screen.
+   Owners are never paid incentives — they would only be paying themselves. */
+const INC_DEF={review:5,memberFirst:.15,memberNext:.05,split:true,onJob:true};
+const incSet=()=>Object.assign({},INC_DEF,S.settings.incent||{});
+const incList=()=>S.incentives||(S.incentives=[]);
+const memberById=id=>incList().find(x=>x.id===id&&x.type==="member");
+const activeMembers=()=>incList().filter(x=>x.type==="member"&&x.status==="approved");
+const memberVisits=mId=>S.jobs.filter(j=>j.member===mId&&j.status==="Completed")
+  .sort((a,b)=>a.date.localeCompare(b.date)||String(a.id).localeCompare(String(b.id)));
+function incentivesBy(p){
+  const by={}, R=incSet();
+  const add=(n,amt,it)=>{ amt=r2(amt); if(!n||isOwner(n)||!amt) return;
+    const r=by[n]||(by[n]={amt:0,items:[]}); r.amt=r2(r.amt+amt); r.items.push(Object.assign({amt},it)); };
+  incList().forEach(x=>{
+    if(x.type==="review"&&x.status==="approved"&&x.pp===p)
+      (x.techs||[]).forEach(n=>add(n,num(R.review),{kind:"Review",note:x.customer}));
+  });
+  jobsIn(p).forEach(j=>{
+    if(!j.member||j.status!=="Completed") return;
+    const m=memberById(j.member); if(!m||m.status!=="approved") return;
+    if(m.ended&&j.date>m.ended) return;       // they cancelled before this detail
+    const n=memberVisits(m.id).indexOf(j)+1; if(n<1) return;
+    const rate=n===1?num(R.memberFirst):num(R.memberNext);
+    const sellers=(m.techs||[]).filter(Boolean);
+    /* Two people sold it together: each takes half unless the split is off. */
+    const share=(R.split&&sellers.length>1)?1/sellers.length:1;
+    sellers.forEach(s=>{
+      /* The member is locked to the team that sold it. If another crew covers
+         a visit, the seller wasn't there and the extra doesn't pay. */
+      if(R.onJob&&(j.techs||[]).indexOf(s)<0) return;
+      add(s,num(j.price)*rate*share,{kind:n===1?"Member, 1st detail":"Member detail #"+n,
+        note:m.customer+" · "+pct(rate)+(share<1?" × ½":"")});
+    });
+  });
   return by;
 }
 function extraSplit(p){
@@ -814,7 +880,7 @@ function totals(p){
 function payroll(p){
   const by={}, EX=extrasBy(p);
   const blankRow=n=>({name:n,role:techRole(n)||"—",jobs:0,rev:0,comm:0,tip:0,tipCash:0,adj:0,hours:0,solo:0,
-                      bonus:0,reimb:0,deduct:0,items:[]});
+                      bonus:0,reimb:0,deduct:0,items:[],inc:0,incItems:[]});
   jobsIn(p).forEach(j=>lines(j).forEach(l=>{
     const r=by[l.name]||(by[l.name]=blankRow(l.name));
     r.jobs++;r.rev+=num(l.job.price);r.comm+=l.comm;r.tip+=l.tip;
@@ -823,7 +889,8 @@ function payroll(p){
   // Somebody can have a bonus or a reimbursement in a period they worked no jobs.
   Object.keys(EX).forEach(n=>{
     const r=by[n]||(by[n]=blankRow(n));
-    r.bonus=r2(EX[n].bonus); r.reimb=r2(EX[n].reimb); r.deduct=r2(EX[n].deduct); r.items=EX[n].items;});
+    r.bonus=r2(EX[n].bonus); r.reimb=r2(EX[n].reimb); r.deduct=r2(EX[n].deduct); r.items=EX[n].items;
+    r.inc=r2(EX[n].inc||0); r.incItems=EX[n].incItems||[];});
   return Object.values(by).map(r=>{
     r.comm=r2(r.comm);r.tip=r2(r.tip);r.tipCash=r2(r.tipCash);r.adj=r2(r.adj);r.hours=r2(r.hours);
     // Tips they already pocketed in cash on the job. Owed to them: nothing more.
@@ -868,7 +935,7 @@ function plan(p){
 
 /* ---------------- ui ---------------- */
 let CUR=(periodOf(todayISO())||PERIODS[15]).id, VIEW="period";
-const TITLES={period:"Pay period",moves:"Money moves",payroll:"Payroll",jobs:"Jobs",spend:"Spend",months:"Monthly report",year:"Year",setup:"Setup"};
+const TITLES={period:"Pay period",moves:"Money moves",payroll:"Payroll",incent:"Incentives",jobs:"Jobs",spend:"Spend",months:"Monthly report",year:"Year",setup:"Setup"};
 function fillPeriods(){
   $("#periodSel").innerHTML=PERIODS.map(p=>{const t=totals(p.id);
     return `<option value="${p.id}"${p.id===CUR?" selected":""}>${esc(p.label)}${(t.jobs||t.opex)?"":"  ·  empty"}</option>`;}).join("");
@@ -1050,7 +1117,8 @@ function renderPayroll(){
     ${r.tipCash?`<div class="qbrow" style="color:var(--cash)">
       <span>Cash tips <span class="pill cash">already taken</span></span><span>${money(r.tipCash)}</span></div>`:""}
     ${r.adj?`<div class="qbrow"><span>Job adjustments</span><span>${money(r.adj)}</span></div>`:""}
-    ${r.bonus?`<div class="qbrow"><span>Bonus <span class="pill warn">taxed</span></span><span>${money(r.bonus)}</span></div>`:""}
+    ${r2(r.bonus-r.inc)?`<div class="qbrow"><span>Bonus <span class="pill warn">taxed</span></span><span>${money(r2(r.bonus-r.inc))}</span></div>`:""}
+    ${r.inc?`<div class="qbrow"><span>Incentives <span class="pill warn">taxed</span></span><span>${money(r.inc)}</span></div>`:""}
     ${r.deduct?`<div class="qbrow"><span>Deduction</span><span>${money(-r.deduct)}</span></div>`:""}
     <div class="qbrow tot"><span>GROSS <span class="hint">taxable</span></span><span>${money(r.gross)}</span></div>
     ${r.reimb?`<div class="qbrow"><span>Reimbursement <span class="pill pos">not taxed</span></span><span>${money(r.reimb)}</span></div>
@@ -1058,8 +1126,9 @@ function renderPayroll(){
     <div class="qbrow"><span>Hours</span><span>${r.hours||"—"}</span></div>
     <div class="qbrow"><span>Per hour</span><span>${isFinite(r.rate)?money(r.rate):"—"}</span></div>
     ${r.under?`<div class="qbrow" style="color:var(--neg)"><span>Top-up to ${money(mw)}</span><span>${money(r.topup)}</span></div>`:""}
-    ${r.items.length?`<div class="qbrow" style="display:block;color:var(--mut);font-size:.76rem;padding-top:.3rem">
-      ${r.items.map(it=>esc(it.type)+": "+esc(it.note||"no reason given")).join("<br>")}</div>`:""}</div>`;
+    ${(r.items.length||r.incItems.length)?`<div class="qbrow" style="display:block;color:var(--mut);font-size:.76rem;padding-top:.3rem">
+      ${r.items.map(it=>esc(it.type)+": "+esc(it.note||"no reason given")).concat(
+        r.incItems.map(it=>esc(it.kind)+": "+esc(it.note)+" "+money(it.amt))).join("<br>")}</div>`:""}</div>`;
   $("#v-payroll").innerHTML=`
     <div class="card"><h2>QuickBooks direct deposit — employees</h2>
       <p class="sub">Type these gross amounts into the QuickBooks pay run for ${esc(p.short)}. Nothing here needs recalculating there.</p>
@@ -1099,14 +1168,15 @@ function renderPayroll(){
     <div class="card"><h2>Everyone, in detail</h2>
       <div class="scroll"><table>
         <thead><tr><th>Person</th><th>Type</th><th class="n">Jobs</th><th class="n">Solo</th><th class="n">Revenue worked</th>
-          <th class="n">Commission</th><th class="n">Tips<br><span class="hint">payroll</span></th><th class="n">Cash tips<br><span class="hint">already taken</span></th><th class="n">Adj</th><th class="n">Bonus</th>
+          <th class="n">Commission</th><th class="n">Tips<br><span class="hint">payroll</span></th><th class="n">Cash tips<br><span class="hint">already taken</span></th><th class="n">Adj</th><th class="n">Bonus</th><th class="n">Incentives</th>
           <th class="n">Gross</th><th class="n">Reimb</th><th class="n">Take home</th>
           <th class="n">Hours</th><th class="n">$/hr</th></tr></thead>
         <tbody>${P.pr.map(r=>`<tr><td><b>${esc(r.name)}</b></td>
           <td>${r.owner?'<span class="pill mut">draw</span>':'<span class="pill mut">W-2</span>'}</td>
           <td class="n">${r.jobs}</td><td class="n">${r.solo||"—"}</td><td class="n">${money0(r.rev)}</td>
           <td class="n">${money(r.comm)}</td><td class="n">${money(r.tipPay)}</td><td class="n" style="color:var(--cash)">${r.tipCash?money(r.tipCash):"—"}</td><td class="n">${r.adj?money(r.adj):"—"}</td>
-          <td class="n">${r.bonus?money(r.bonus):"—"}</td>
+          <td class="n">${r2(r.bonus-r.inc)?money(r2(r.bonus-r.inc)):"—"}</td>
+          <td class="n">${r.inc?money(r.inc):"—"}</td>
           <td class="n"><b>${money(r.gross)}</b></td><td class="n">${r.reimb?money(r.reimb):"—"}</td>
           <td class="n"><b>${money(r.payout)}</b></td><td class="n">${r.hours||"—"}</td>
           <td class="n">${isFinite(r.rate)?money(r.rate):"—"}</td></tr>`).join("")}</tbody></table></div></div>`;
@@ -1123,10 +1193,267 @@ function renderPayroll(){
     const txt=[p.label+" — QuickBooks direct deposit",""]
       .concat(emp.map(r=>r.name+"   gross "+money(r.gross)+"   hours "+(r.hours||0)+
         (r.tipCash?"   [excludes "+money(r.tipCash)+" of cash tips already split on the job]":"")+
+        (r.inc?"   [includes "+money(r.inc)+" of incentives — enter as a bonus line]":"")+
         (r.reimb?"   + reimbursement "+money(r.reimb)+" (non-taxable, enter as a reimbursement line)":"")))
       .concat(["","Total gross "+money(t.empWages),"Employer tax "+money(t.empTax),
                "Reimbursements "+money(t.x.empReimb)+" (not wages)","Fund "+money(P.qbCost)]).join("\n");
     navigator.clipboard&&navigator.clipboard.writeText(txt).then(()=>toast("Copied."),()=>toast("Copy blocked."));});
+}
+
+/* ---- INCENTIVES ---- */
+const INC_SHEET="https://docs.google.com/spreadsheets/d/1Ez9aS0Kbv35VkG5JzvifjZcNSIEkfpTIRnFbbsATMR8/edit";
+const INC_PLANS=["Basic (20% off)","Standard (25% off)","Exterior (15% off)"];
+let INCMON=todayISO().slice(0,7), PENDINC=null;
+const nameToks=s=>String(s||"").toLowerCase().replace(/[^a-z ]/g," ").split(/\s+/).filter(Boolean);
+/* Loose on purpose: it only ever SUGGESTS a match, and Habib confirms it. The
+   crew type "Sarah", "sarah jones" and "Sarah J" for the same person. */
+function sameName(a,b){
+  const A=nameToks(a),B=nameToks(b); if(!A.length||!B.length) return false;
+  if(A.join(" ")===B.join(" ")) return true;
+  if(A[0]!==B[0]) return false;
+  if(A.length===1||B.length===1) return true;
+  return A[A.length-1][0]===B[B.length-1][0];
+}
+/* A completed job whose customer looks like a current member, on or after the day
+   they signed up, that isn't already tied to a member and wasn't waved off. */
+function memberSuggest(j){
+  if(j.member||j.status!=="Completed") return null;
+  return activeMembers().find(m=>!m.ended&&sameName(m.customer,j.customer)&&(!m.date||j.date>=m.date)
+    &&(j.notMember||[]).indexOf(m.id)<0)||null;
+}
+/* Same kind of entry, same customer, within 30 days, not denied: probably both
+   techs logged the same review. */
+function incDup(x){
+  return incList().find(y=>y.id!==x.id&&y.type===x.type&&y.status!=="denied"&&sameName(y.customer,x.customer)
+    &&Math.abs(toUTC(y.date)-toUTC(x.date))<=30*DAY)||null;
+}
+const incTechs=v=>String(v||"").split(/\s*(?:\+|,|&|\/|\band\b)\s*/i).map(s=>s.trim()).filter(Boolean);
+function parseIncImport(txt){
+  const rows=splitRows(txt); if(rows.length<2) return {err:"Paste the header row plus at least one entry."};
+  const head=rows[0].map(nrm);
+  const find=(...n)=>{for(const x of n){const i=head.indexOf(nrm(x));if(i>-1)return i;}return -1;};
+  const iType=find("type","what are you logging?"), iCust=find("customer","customer on the job","member's name");
+  if(iType<0||iCust<0) return {err:"No Type or Customer column — copy the header row from the Incentive Log tab too."};
+  const iId=find("id"), iAt=find("logged at","timestamp"), iDate=find("date"), iTechs=find("techs","techs on the job","who sold it?"),
+    iBy=find("logged by","your name"), iPlan=find("plan","membership"), iPhone=find("phone","member's phone"),
+    iFirst=find("first visit","first member detail"), iStars=find("stars"), iRName=find("name on review","name on the google review"),
+    iVeh=find("vehicle"), iNotes=find("notes");
+  const out=[],warn=[],cell=(r,i)=>i>-1?String(r[i]==null?"":r[i]).trim():"";
+  for(let r=1;r<rows.length;r++){ const row=rows[r];
+    const typ=cell(row,iType), cust=cell(row,iCust); if(!typ&&!cust) continue;
+    const type=/member/i.test(typ)?"member":/review/i.test(typ)?"review":null;
+    if(!type){warn.push("Row "+(r+1)+": \""+typ+"\" isn't a review or a membership — skipped.");continue;}
+    const at=parseDate(cell(row,iAt))||todayISO(), date=parseDate(cell(row,iDate))||at;
+    out.push({id:cell(row,iId)||("inc-"+uid()),type,at,date,customer:cust||"—",techs:incTechs(cell(row,iTechs)),
+      by:cell(row,iBy),plan:cell(row,iPlan),phone:cell(row,iPhone),firstVisit:parseDate(cell(row,iFirst))||"",
+      stars:cell(row,iStars),reviewName:cell(row,iRName),vehicle:cell(row,iVeh),notes:cell(row,iNotes),
+      src:"form",status:"pending"});
+  }
+  return {items:out,warn};
+}
+function previewIncImport(){
+  const res=parseIncImport($("#incPaste").value), box=$("#incPreview");
+  if(res.err){box.innerHTML=`<p class="hint" style="color:var(--neg)">${esc(res.err)}</p>`;return;}
+  const have=new Set(incList().map(x=>x.id)), known=new Set(S.settings.techs.map(t=>t.name));
+  res.items.forEach(x=>{x._in=have.has(x.id); x._unk=x.techs.filter(t=>!known.has(t));});
+  PENDINC=res.items;
+  const fresh=res.items.filter(x=>!x._in).length, unk=[...new Set(res.items.flatMap(x=>x._unk))];
+  box.innerHTML=`<div class="bar" style="margin-top:.8rem"><span class="pill pos">${fresh} new</span>
+      ${res.items.length-fresh?`<span class="pill mut">${res.items.length-fresh} already here</span>`:""}
+      ${unk.length?`<span class="pill neg">unknown name: ${esc(unk.join(", "))}</span>`:""}</div>
+    ${res.warn.length?`<p class="hint">${res.warn.map(esc).join("<br>")}</p>`:""}
+    <div class="scroll" style="margin-top:.5rem;max-height:15rem;overflow-y:auto"><table>
+      <thead><tr><th></th><th>Logged</th><th>Type</th><th>Customer</th><th>Techs</th><th>By</th></tr></thead>
+      <tbody>${res.items.map((x,i)=>`<tr><td><input type="checkbox" data-iimp="${i}" ${x._in?"disabled":"checked"}></td>
+        <td>${esc(fmtD(x.at))}</td><td>${x.type==="review"?"Review":"Membership"}</td><td>${esc(x.customer)}</td>
+        <td>${esc(x.techs.join(" + "))||"—"}${x._unk.length?' <span class="pill neg">?</span>':""}</td><td>${esc(x.by||"—")}</td></tr>`).join("")}
+      </tbody></table></div>
+    <div class="bar"><button class="pri" id="incConfirm">Bring in ticked entries</button>
+      <button class="ghost" id="incCancel">Cancel</button>
+      <span class="hint">They arrive waiting for your OK — nothing pays yet.</span></div>`;
+  $("#incConfirm").addEventListener("click",()=>{
+    const pick=$$("[data-iimp]").filter(c=>c.checked&&!c.disabled).map(c=>PENDINC[+c.dataset.iimp]);
+    if(!pick.length) return toast("Nothing new ticked.");
+    pick.forEach(x=>{delete x._in;delete x._unk;incList().push(x);});
+    save(); renderAll(); toast("Brought in "+pick.length+" entr"+(pick.length===1?"y":"ies")+". Approve them below.");});
+  $("#incCancel").addEventListener("click",()=>{box.innerHTML="";$("#incPaste").value="";});
+}
+function renderIncent(){
+  const p=PERIODS.find(x=>x.id===CUR), R=incSet(), L=incList();
+  $("#viewSub").textContent=p.short;
+  const tn=S.settings.techs.filter(t=>t.active!==false).map(t=>t.name);
+  const pend=L.filter(x=>x.status==="pending").sort((a,b)=>String(a.at).localeCompare(String(b.at)));
+  const IB=incentivesBy(CUR), earners=Object.keys(IB).sort((a,b)=>IB[b].amt-IB[a].amt);
+  const incTotal=r2(earners.reduce((a,n)=>a+IB[n].amt,0));
+  const revHere=L.filter(x=>x.type==="review"&&x.status==="approved"&&x.pp===CUR);
+  const members=L.filter(x=>x.type==="member"&&x.status==="approved")
+    .sort((a,b)=>(!!a.ended-!!b.ended)||String(a.customer).localeCompare(String(b.customer)));
+  const sugg=S.jobs.map(j=>({j,m:memberSuggest(j)})).filter(o=>o.m).sort((a,b)=>b.j.date.localeCompare(a.j.date));
+  const visitsHere=jobsIn(CUR).filter(j=>j.member&&memberById(j.member)).sort((a,b)=>a.date.localeCompare(b.date));
+  const denied=L.filter(x=>x.status==="denied");
+  const pctIn=v=>Math.round(num(v)*1000)/10;
+  const typePill=x=>x.type==="review"?'<span class="pill warn">Review</span>':'<span class="pill pos">Membership</span>';
+  const detail=x=>x.type==="review"
+    ? [x.stars?esc(x.stars)+"★":"",x.reviewName?"on Google as "+esc(x.reviewName):"","job "+esc(fmtD(x.date))].filter(Boolean).join(" · ")
+    : [esc(x.plan||"plan not given"),x.phone?esc(x.phone):"","sold "+esc(fmtD(x.date)),
+       x.firstVisit?"1st detail "+esc(fmtD(x.firstVisit)):""].filter(Boolean).join(" · ");
+  const ownerNote=x=>(x.techs||[]).some(isOwner)?' <span class="hint">owners aren\'t paid</span>':"";
+
+  /* leaderboard: approved entries in the chosen calendar month */
+  const board={}, row=n=>board[n]||(board[n]={rev:0,mem:0});
+  tn.filter(n=>!isOwner(n)).forEach(row);
+  L.forEach(x=>{ if(x.status!=="approved") return;
+    if(x.type==="review"&&String(x.at).slice(0,7)===INCMON) (x.techs||[]).forEach(n=>{if(!isOwner(n)) row(n).rev++;});
+    if(x.type==="member"&&String(x.date).slice(0,7)===INCMON) (x.techs||[]).forEach(n=>{if(!isOwner(n)) row(n).mem++;}); });
+  const bn=Object.keys(board), topRev=Math.max(0,...bn.map(n=>board[n].rev)), topMem=Math.max(0,...bn.map(n=>board[n].mem));
+  const lead=(v,top)=>v&&v===top?` <span class="pill pos">lead</span>`:"";
+
+  $("#v-incent").innerHTML=`
+    <div class="kpis">
+      ${kpi("Incentives this period",money(incTotal),earners.length?earners.length+" "+(earners.length===1?"person":"people"):"nobody yet")}
+      ${kpi("Waiting for your OK",String(pend.length),pend.length?"approve below":"all caught up",pend.length?"warn":"")}
+      ${kpi("Members",String(members.filter(m=>!m.ended).length),"active")}
+      ${kpi("Possible member visits",String(sugg.length),sugg.length?"confirm below":"none found",sugg.length?"warn":"")}
+    </div>
+
+    <div class="card"><h2>Bring entries over from the Incentive Log</h2>
+      <p class="sub">The crew log reviews and membership sales on the Incentive form, and each one lands as a row in the
+        <a href="${INC_SHEET}" target="_blank" rel="noopener">Work Log's Incentive Log tab</a>. Select the rows
+        <b>including the header row</b>, copy, paste here. Entries already brought in are skipped.</p>
+      <textarea id="incPaste" rows="3" placeholder="Paste Incentive Log rows here…" style="width:100%"></textarea>
+      <div class="bar"><button class="pri" id="incPrev">Preview</button></div>
+      <div id="incPreview"></div></div>
+
+    <div class="card"><h2>Waiting for your OK</h2>
+      <p class="sub">Check a review is really on Google before you approve it. An approved review pays
+        ${money(num(R.review))} to each employee on it, on the ${esc(p.short)} paycheck (the period on screen).
+        Approving a membership makes them a member; their details then pay the seller.</p>
+      ${pend.length?`<div class="scroll"><table>
+        <thead><tr><th>Logged</th><th>Type</th><th>Customer</th><th>Techs / sold by</th><th>Details</th><th>By</th><th></th></tr></thead>
+        <tbody>${pend.map(x=>{const d=incDup(x); return `<tr>
+          <td>${esc(fmtD(x.at))}</td><td>${typePill(x)}</td>
+          <td><b>${esc(x.customer)}</b>${d?` <span class="pill neg">already logged ${esc(fmtD(d.at))}?</span>`:""}</td>
+          <td>${esc((x.techs||[]).join(" + ")||"—")}${ownerNote(x)}</td>
+          <td class="hint">${detail(x)}${x.notes?"<br>"+esc(x.notes):""}</td><td>${esc(x.by||"—")}</td>
+          <td class="n" style="white-space:nowrap"><button class="sm pri" data-iok="${esc(x.id)}">${x.type==="review"?"Approve":"Approve member"}</button>
+            <button class="sm ghost" data-ino="${esc(x.id)}">Deny</button></td></tr>`;}).join("")}</tbody></table></div>`
+        :`<div class="empty">Nothing waiting.</div>`}
+    </div>
+
+    <div class="card"><h2>Incentive pay, ${esc(p.short)}</h2>
+      <p class="sub">Already in each person's gross on the Payroll screen, as its own Incentives line.</p>
+      ${earners.length?`<div class="scroll"><table>
+        <thead><tr><th>Person</th><th>What for</th><th class="n">Amount</th></tr></thead>
+        <tbody>${earners.map(n=>`<tr><td><b>${esc(n)}</b></td>
+          <td class="hint">${IB[n].items.map(it=>esc(it.kind)+": "+esc(it.note)+" "+money(it.amt)).join("<br>")}</td>
+          <td class="n"><b>${money(IB[n].amt)}</b></td></tr>`).join("")}</tbody></table></div>`
+        :`<div class="empty">No incentive pay in this period yet.</div>`}
+      ${(revHere.length||visitsHere.length)?`<details style="margin-top:.7rem"><summary class="hint" style="cursor:pointer">
+        ${revHere.length} review${revHere.length===1?"":"s"} and ${visitsHere.length} member detail${visitsHere.length===1?"":"s"} counted here — undo one</summary>
+        <div class="scroll" style="margin-top:.4rem"><table><tbody>
+        ${revHere.map(x=>`<tr><td>${typePill(x)}</td><td>${esc(x.customer)}</td><td>${esc((x.techs||[]).join(" + "))}</td>
+          <td class="n"><button class="sm ghost" data-iundo="${esc(x.id)}">back to waiting</button></td></tr>`).join("")}
+        ${visitsHere.map(j=>{const m=memberById(j.member),n=memberVisits(j.member).indexOf(j)+1;return `<tr>
+          <td><span class="pill pos">Member detail</span></td><td>${esc(j.customer)} · ${esc(fmtD(j.date))}</td>
+          <td>${n>0?(n===1?"1st detail":"detail #"+n):"not completed"} · sold by ${esc((m.techs||[]).join(" + "))}</td>
+          <td class="n"><button class="sm ghost" data-munlink="${esc(j.id)}">not a member detail</button></td></tr>`;}).join("")}
+        </tbody></table></div></details>`:""}
+    </div>
+
+    <div class="card"><h2>Members</h2>
+      <p class="sub">Each member detail pays whoever sold the membership: <b>+${pctIn(R.memberFirst)}%</b> of the first
+        detail, <b>+${pctIn(R.memberNext)}%</b> of every one after${R.onJob?", on the details they work":""}.
+        Jobs are matched to members by name — confirm each one so a lookalike name never pays.</p>
+      ${sugg.length?`<div class="scroll"><table>
+        <thead><tr><th>Job</th><th>Customer</th><th>Crew</th><th class="n">Price</th><th>Looks like member</th><th></th></tr></thead>
+        <tbody>${sugg.map(o=>`<tr><td>${esc(fmtD(o.j.date))}</td><td><b>${esc(o.j.customer)}</b></td>
+          <td>${esc((o.j.techs||[]).join(" + "))}</td><td class="n">${money0(o.j.price)}</td>
+          <td>${esc(o.m.customer)} · ${esc(o.m.plan||"")} · sold by ${esc((o.m.techs||[]).join(" + "))}</td>
+          <td class="n" style="white-space:nowrap"><button class="sm pri" data-mlink="${esc(o.j.id)}|${esc(o.m.id)}">Member detail</button>
+            <button class="sm ghost" data-mskip="${esc(o.j.id)}|${esc(o.m.id)}">Not them</button></td></tr>`).join("")}</tbody></table></div>`:""}
+      ${members.length?`<div class="scroll" style="margin-top:.6rem"><table>
+        <thead><tr><th>Member</th><th>Plan</th><th>Sold by</th><th>Signed up</th><th class="n">Details so far</th><th>Next detail pays</th><th></th></tr></thead>
+        <tbody>${members.map(m=>{const v=memberVisits(m.id).length;return `<tr${m.ended?' style="opacity:.55"':""}>
+          <td><b>${esc(m.customer)}</b>${m.phone?`<br><span class="hint">${esc(m.phone)}</span>`:""}</td>
+          <td>${esc(m.plan||"—")}</td><td>${esc((m.techs||[]).join(" + ")||"—")}</td><td>${esc(fmtD(m.date))}</td>
+          <td class="n">${v}</td>
+          <td>${m.ended?`<span class="pill mut">cancelled ${esc(fmtD(m.ended))}</span>`:"+"+(v?pctIn(R.memberNext):pctIn(R.memberFirst))+"%"}</td>
+          <td class="n"><button class="sm ghost" data-mend="${esc(m.id)}">${m.ended?"Reactivate":"Cancelled"}</button></td></tr>`;}).join("")}
+        </tbody></table></div>`:`<div class="empty">No members yet. Approve a membership sale above and it shows up here.</div>`}
+    </div>
+
+    <div class="card"><h2>Leaderboard</h2>
+      <div class="bar" style="margin:0 0 .5rem"><input type="month" id="incMonth" value="${esc(INCMON)}" aria-label="Month">
+        <span class="hint">Approved entries only. Prizes aren't set yet.</span></div>
+      <div class="scroll"><table>
+        <thead><tr><th>Tech</th><th class="n">Reviews</th><th class="n">Memberships sold</th><th class="n">Booked jobs<br><span class="hint">GoHighLevel, next</span></th></tr></thead>
+        <tbody>${bn.sort((a,b)=>(board[b].rev+board[b].mem*3)-(board[a].rev+board[a].mem*3)).map(n=>`<tr><td><b>${esc(n)}</b></td>
+          <td class="n">${board[n].rev}${lead(board[n].rev,topRev)}</td><td class="n">${board[n].mem}${lead(board[n].mem,topMem)}</td>
+          <td class="n">—</td></tr>`).join("")}</tbody></table></div>
+    </div>
+
+    <div class="card"><h2>Add one by hand</h2>
+      <p class="sub">For when someone forgot the form. These count as approved straight away.</p>
+      <div class="grid">
+        <div class="f"><label>What</label><select id="ihType"><option value="review">Review</option><option value="member">Membership sale</option></select></div>
+        <div class="f"><label>Customer</label><input id="ihCust" placeholder="name"></div>
+        <div class="f"><label>Date <span class="hint">job, or day sold</span></label><input id="ihDate" type="date" value="${esc(todayISO())}"></div>
+        <div class="f"><label>Plan <span class="hint">membership only</span></label><select id="ihPlan">${opts(INC_PLANS)}</select></div>
+        <div class="f"><label>Phone <span class="hint">membership only</span></label><input id="ihPhone"></div>
+      </div>
+      <div class="bar" style="flex-wrap:wrap"><span class="hint">Techs on it:</span>
+        ${tn.map(n=>`<label style="display:flex;gap:.3rem;align-items:center;font-size:.85rem"><input type="checkbox" data-iht="${esc(n)}"> ${esc(n)}</label>`).join("")}</div>
+      <div class="bar"><button class="pri" id="ihAdd">Add</button></div>
+    </div>
+
+    <div class="card"><h2>Rules</h2>
+      <p class="sub">Changing these recalculates every period, including ones already paid. Change them at the start of a period.</p>
+      <div class="grid">
+        <div class="f"><label>Per review, each tech ($)</label><input id="irv" type="number" min="0" step="0.5" value="${num(R.review)}"></div>
+        <div class="f"><label>Member 1st detail (%)</label><input id="im1" type="number" min="0" step="0.5" value="${pctIn(R.memberFirst)}"></div>
+        <div class="f"><label>Every detail after (%)</label><input id="im2" type="number" min="0" step="0.5" value="${pctIn(R.memberNext)}"></div>
+        <div class="f"><label>Two people sold it</label><select id="isp"><option value="1"${R.split?" selected":""}>split it in half</option><option value="0"${R.split?"":" selected"}>each gets the full %</option></select></div>
+        <div class="f"><label>Seller not on the detail</label><select id="ioj"><option value="1"${R.onJob?" selected":""}>no extra that time</option><option value="0"${R.onJob?"":" selected"}>still paid</option></select></div>
+      </div>
+      <div class="bar"><button class="pri" id="incRules">Save rules</button></div>
+    </div>
+    ${denied.length?`<div class="card"><details><summary class="hint" style="cursor:pointer">${denied.length} denied entr${denied.length===1?"y":"ies"}</summary>
+      <div class="scroll" style="margin-top:.4rem"><table><tbody>${denied.map(x=>`<tr><td>${esc(fmtD(x.at))}</td><td>${typePill(x)}</td>
+        <td>${esc(x.customer)}</td><td>${esc((x.techs||[]).join(" + "))}</td>
+        <td class="n"><button class="sm ghost" data-iundo="${esc(x.id)}">back to waiting</button></td></tr>`).join("")}</tbody></table></div></details></div>`:""}`;
+
+  const find=id=>L.find(x=>x.id===id), jobBy=id=>S.jobs.find(j=>j.id===id);
+  $("#incPrev").addEventListener("click",previewIncImport);
+  $$("[data-iok]").forEach(b=>b.addEventListener("click",()=>{const x=find(b.dataset.iok); if(!x) return;
+    x.status="approved"; x.okAt=todayISO(); if(x.type==="review") x.pp=CUR;
+    save(); renderAll(); toast(x.type==="review"?"Approved — on the "+p.short+" paycheck.":"Approved — "+x.customer+" is a member.");}));
+  $$("[data-ino]").forEach(b=>b.addEventListener("click",()=>{const x=find(b.dataset.ino); if(!x) return;
+    x.status="denied"; delete x.pp; save(); renderAll(); toast("Denied.");}));
+  $$("[data-iundo]").forEach(b=>b.addEventListener("click",()=>{const x=find(b.dataset.iundo); if(!x) return;
+    x.status="pending"; delete x.pp; save(); renderAll(); toast("Back to waiting.");}));
+  $$("[data-mlink]").forEach(b=>b.addEventListener("click",()=>{const [jid,mid]=b.dataset.mlink.split("|"), j=jobBy(jid);
+    if(!j) return; j.member=mid; save(); renderAll(); toast("Counted as a member detail.");}));
+  $$("[data-mskip]").forEach(b=>b.addEventListener("click",()=>{const [jid,mid]=b.dataset.mskip.split("|"), j=jobBy(jid);
+    if(!j) return; (j.notMember||(j.notMember=[])).push(mid); save(); renderAll();}));
+  $$("[data-munlink]").forEach(b=>b.addEventListener("click",()=>{const j=jobBy(b.dataset.munlink); if(!j) return;
+    if(j.member) (j.notMember||(j.notMember=[])).push(j.member); delete j.member; save(); renderAll(); toast("Not counted as a member detail.");}));
+  $$("[data-mend]").forEach(b=>arm(b,()=>{const m=find(b.dataset.mend); if(!m) return;
+    if(m.ended) delete m.ended; else m.ended=todayISO(); save(); renderAll();}));
+  $("#incMonth").addEventListener("change",e=>{INCMON=e.target.value||todayISO().slice(0,7); renderIncent();});
+  $("#ihAdd").addEventListener("click",()=>{
+    const type=$("#ihType").value, cust=$("#ihCust").value.trim(), date=$("#ihDate").value||todayISO();
+    const techs=$$("[data-iht]").filter(c=>c.checked).map(c=>c.dataset.iht);
+    if(!cust) return toast("Put the customer's name in.");
+    if(!techs.length) return toast("Tick who it's for.");
+    const x={id:"inc-"+uid(),type,at:todayISO(),date,customer:cust,techs,by:"Habib (by hand)",
+      plan:type==="member"?$("#ihPlan").value:"",phone:type==="member"?$("#ihPhone").value.trim():"",
+      firstVisit:"",stars:"",reviewName:"",vehicle:"",notes:"",src:"hand",status:"approved",okAt:todayISO()};
+    if(type==="review") x.pp=CUR;
+    incList().push(x); save(); renderAll(); toast("Added.");});
+  $("#incRules").addEventListener("click",()=>{
+    S.settings.incent={review:Math.max(0,num($("#irv").value)),memberFirst:Math.max(0,num($("#im1").value))/100,
+      memberNext:Math.max(0,num($("#im2").value))/100,split:$("#isp").value==="1",onJob:$("#ioj").value==="1"};
+    save(); renderAll(); toast("Rules saved.");});
 }
 
 /* ---- JOBS ---- */
@@ -1171,7 +1498,7 @@ function renderJobs(){
           <td class="n">${money0(j.price)}</td><td class="n">${num(j.tip)?money0(j.tip):"—"}</td>
           <td>${S.settings.cashMethods.indexOf(j.payment)>-1?'<span class="pill cash">cash</span>':
                 S.settings.ksMethods.indexOf(j.payment)>-1?'<span class="pill warn">KS</span>':esc(j.payment)}</td>
-          <td>${ls.length?ls.map(l=>esc(l.name)).join(" + "):'<span class="pill mut">none</span>'}${ls.length===1?' <span class="pill solo">solo</span>':""}</td>
+          <td>${ls.length?ls.map(l=>esc(l.name)).join(" + "):'<span class="pill mut">none</span>'}${ls.length===1?' <span class="pill solo">solo</span>':""}${j.member&&memberById(j.member)?' <span class="pill pos">member</span>':""}</td>
           <td class="n">${ls.length?[...new Set(ls.map(l=>pct(l.rate)))].join("/"):"—"}</td>
           <td class="n">${money0(lab)}</td><td class="n">${num(j.hours)||"—"}</td>
           <td><button class="sm danger" data-del="${j.id}">×</button></td></tr>`;}).join("")}</tbody></table>`
@@ -1997,7 +2324,7 @@ function loadSample(){
 /* ---- boot ---- */
 function renderAll(){
   fillPeriods();
-  ({period:renderPeriod,moves:renderMoves,payroll:renderPayroll,jobs:renderJobs,
+  ({period:renderPeriod,moves:renderMoves,payroll:renderPayroll,incent:renderIncent,jobs:renderJobs,
     spend:renderSpend,months:renderMonths,year:renderYear,setup:renderSetup})[VIEW]();
   paintSync();
 }
