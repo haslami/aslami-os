@@ -1129,7 +1129,17 @@ function renderPayroll(){
     ${(r.items.length||r.incItems.length)?`<div class="qbrow" style="display:block;color:var(--mut);font-size:.76rem;padding-top:.3rem">
       ${r.items.map(it=>esc(it.type)+": "+esc(it.note||"no reason given")).concat(
         r.incItems.map(it=>esc(it.kind)+": "+esc(it.note)+" "+money(it.amt))).join("<br>")}</div>`:""}</div>`;
-  $("#v-payroll").innerHTML=`
+  /* Anything still waiting on the Incentives screen is NOT in these numbers.
+     Say so up top, so a paycheck never goes out short by an unapproved review or
+     an unconfirmed member detail. */
+  const pendN=incList().filter(x=>x.status==="pending").length;
+  const suggN=jobsIn(CUR).filter(j=>memberSuggest(j)).length;
+  const nudge=(pendN||suggN)?`<div class="card" style="border-color:var(--warn)"><h2>Before you pay</h2>
+      <p class="sub">${[pendN?pendN+" incentive entr"+(pendN===1?"y is":"ies are")+" waiting for your OK":"",
+        suggN?suggN+(suggN===1?" job looks like a member detail but isn't confirmed":" jobs look like member details but aren't confirmed"):""].filter(Boolean).join(", and ")}.
+        Nothing there is in these paychecks until you approve it.</p>
+      <div class="bar"><button class="pri sm" id="goInc">Open Incentives</button></div></div>`:"";
+  $("#v-payroll").innerHTML=`${nudge}
     <div class="card"><h2>QuickBooks direct deposit — employees</h2>
       <p class="sub">Type these gross amounts into the QuickBooks pay run for ${esc(p.short)}. Nothing here needs recalculating there.</p>
       ${emp.length?`<div class="qb">${emp.map(card).join("")}</div>
@@ -1155,7 +1165,7 @@ function renderPayroll(){
           <td class="n"><button class="sm danger" data-delx="${e.id}">remove</button></td></tr>`).join("")}
         </tbody></table></div>`:`<div class="empty">Nothing this period.</div>`}
       <div class="grid" style="margin-top:.7rem">
-        <div class="f"><label>Person</label><select id="xName">${opts(S.settings.techs.map(t=>t.name))}</select></div>
+        <div class="f"><label>Person</label><select id="xName">${opts(S.settings.techs.filter(t=>t.active!==false).map(t=>t.name))}</select></div>
         <div class="f"><label>Type</label><select id="xType">${opts(EXTRA_TYPES)}</select></div>
         <div class="f"><label>Amount</label><input id="xAmt" type="number" step="0.01" placeholder="0.00"></div>
         <div class="f"><label>Reason</label><input id="xNote" placeholder="e.g. bought pads at O'Reilly"></div>
@@ -1180,6 +1190,7 @@ function renderPayroll(){
           <td class="n"><b>${money(r.gross)}</b></td><td class="n">${r.reimb?money(r.reimb):"—"}</td>
           <td class="n"><b>${money(r.payout)}</b></td><td class="n">${r.hours||"—"}</td>
           <td class="n">${isFinite(r.rate)?money(r.rate):"—"}</td></tr>`).join("")}</tbody></table></div></div>`;
+  const gi=$("#goInc"); if(gi) gi.addEventListener("click",()=>document.querySelector('.nav[data-v="incent"]').click());
   $("#addX").addEventListener("click",()=>{
     const amt=num($("#xAmt").value);
     if(!amt){ toast("Put an amount in first."); return; }
@@ -1222,6 +1233,29 @@ function memberSuggest(j){
   return activeMembers().find(m=>!m.ended&&sameName(m.customer,j.customer)&&(!m.date||j.date>m.date)
     &&(j.notMember||[]).indexOf(m.id)<0)||null;
 }
+/* Clear enough to link with nobody asked: both names have a first AND a last
+   name, and both match ("Lisa Shackelford" = "lisa shackelford"). A first name
+   alone, initials or a nickname stays a suggestion — two different Chrises must
+   never pay somebody for a member detail that wasn't one. */
+function strongName(a,b){
+  const A=nameToks(a),B=nameToks(b);
+  return A.length>1&&B.length>1&&A[0]===B[0]&&A[A.length-1]===B[B.length-1];
+}
+/* Ties each completed job to its member when the match is unambiguous, so a
+   member detail pays the seller as soon as the job is in — no tap needed. Runs
+   when jobs come in and when a membership is approved. Returns how many. */
+function autoLinkMembers(){
+  const mem=activeMembers().filter(m=>!m.ended); if(!mem.length) return 0;
+  let n=0;
+  S.jobs.forEach(j=>{
+    if(j.member||j.status!=="Completed") return;
+    const hits=mem.filter(m=>strongName(m.customer,j.customer)&&(!m.date||j.date>m.date)
+      &&(j.notMember||[]).indexOf(m.id)<0);
+    if(hits.length===1){ j.member=hits[0].id; j.autoMember=true; n++; }
+  });
+  return n;
+}
+const linkedNote=n=>n?" "+n+" member detail"+(n===1?"":"s")+" matched automatically.":"";
 /* Same kind of entry, same customer, within 30 days, not denied: probably both
    techs logged the same review. */
 function incDup(x){
@@ -1355,7 +1389,7 @@ function renderIncent(){
         ${revHere.map(x=>`<tr><td>${typePill(x)}</td><td>${esc(x.customer)}</td><td>${esc((x.techs||[]).join(" + "))}</td>
           <td class="n"><button class="sm ghost" data-iundo="${esc(x.id)}">back to waiting</button></td></tr>`).join("")}
         ${visitsHere.map(j=>{const m=memberById(j.member),n=memberVisits(j.member).indexOf(j)+1;return `<tr>
-          <td><span class="pill pos">Member detail</span></td><td>${esc(j.customer)} · ${esc(fmtD(j.date))}</td>
+          <td><span class="pill pos">Member detail</span>${j.autoMember?' <span class="pill mut">auto</span>':""}</td><td>${esc(j.customer)} · ${esc(fmtD(j.date))}</td>
           <td>${n>0?(n===1?"1st detail":"detail #"+n):"not completed"} · sold by ${esc((m.techs||[]).join(" + "))}</td>
           <td class="n"><button class="sm ghost" data-munlink="${esc(j.id)}">not a member detail</button></td></tr>`;}).join("")}
         </tbody></table></div></details>`:""}
@@ -1364,7 +1398,8 @@ function renderIncent(){
     <div class="card"><h2>Members</h2>
       <p class="sub">Each member detail pays whoever sold the membership: <b>+${pctIn(R.memberFirst)}%</b> of the first
         detail, <b>+${pctIn(R.memberNext)}%</b> of every one after${R.onJob?", on the details they work":""}.
-        Jobs are matched to members by name — confirm each one so a lookalike name never pays.</p>
+        A job whose first and last name match a member exactly is counted automatically when it comes in. A looser
+        match — first name only, a nickname — waits here for you to confirm, so a lookalike name never pays.</p>
       ${sugg.length?`<div class="scroll"><table>
         <thead><tr><th>Job</th><th>Customer</th><th>Crew</th><th class="n">Price</th><th>Looks like member</th><th></th></tr></thead>
         <tbody>${sugg.map(o=>`<tr><td>${esc(fmtD(o.j.date))}</td><td><b>${esc(o.j.customer)}</b></td>
@@ -1427,17 +1462,19 @@ function renderIncent(){
   $("#incPrev").addEventListener("click",previewIncImport);
   $$("[data-iok]").forEach(b=>b.addEventListener("click",()=>{const x=find(b.dataset.iok); if(!x) return;
     x.status="approved"; x.okAt=todayISO(); if(x.type==="review") x.pp=CUR;
-    save(); renderAll(); toast(x.type==="review"?"Approved — on the "+p.short+" paycheck.":"Approved — "+x.customer+" is a member.");}));
+    const ml=x.type==="member"?autoLinkMembers():0;
+    save(); renderAll(); toast(x.type==="review"?"Approved — on the "+p.short+" paycheck.":"Approved — "+x.customer+" is a member."+linkedNote(ml));}));
   $$("[data-ino]").forEach(b=>b.addEventListener("click",()=>{const x=find(b.dataset.ino); if(!x) return;
     x.status="denied"; delete x.pp; save(); renderAll(); toast("Denied.");}));
   $$("[data-iundo]").forEach(b=>b.addEventListener("click",()=>{const x=find(b.dataset.iundo); if(!x) return;
     x.status="pending"; delete x.pp; save(); renderAll(); toast("Back to waiting.");}));
   $$("[data-mlink]").forEach(b=>b.addEventListener("click",()=>{const [jid,mid]=b.dataset.mlink.split("|"), j=jobBy(jid);
-    if(!j) return; j.member=mid; save(); renderAll(); toast("Counted as a member detail.");}));
+    if(!j) return; j.member=mid; delete j.autoMember; save(); renderAll(); toast("Counted as a member detail.");}));
   $$("[data-mskip]").forEach(b=>b.addEventListener("click",()=>{const [jid,mid]=b.dataset.mskip.split("|"), j=jobBy(jid);
     if(!j) return; (j.notMember||(j.notMember=[])).push(mid); save(); renderAll();}));
   $$("[data-munlink]").forEach(b=>b.addEventListener("click",()=>{const j=jobBy(b.dataset.munlink); if(!j) return;
-    if(j.member) (j.notMember||(j.notMember=[])).push(j.member); delete j.member; save(); renderAll(); toast("Not counted as a member detail.");}));
+    if(j.member) (j.notMember||(j.notMember=[])).push(j.member); delete j.member; delete j.autoMember;
+    save(); renderAll(); toast("Not counted as a member detail.");}));
   $$("[data-mend]").forEach(b=>arm(b,()=>{const m=find(b.dataset.mend); if(!m) return;
     if(m.ended) delete m.ended; else m.ended=todayISO(); save(); renderAll();}));
   $("#incMonth").addEventListener("change",e=>{INCMON=e.target.value||todayISO().slice(0,7); renderIncent();});
@@ -1450,7 +1487,8 @@ function renderIncent(){
       plan:type==="member"?$("#ihPlan").value:"",phone:type==="member"?$("#ihPhone").value.trim():"",
       firstVisit:"",stars:"",reviewName:"",vehicle:"",notes:"",src:"hand",status:"approved",okAt:todayISO()};
     if(type==="review") x.pp=CUR;
-    incList().push(x); save(); renderAll(); toast("Added.");});
+    incList().push(x); const ml=type==="member"?autoLinkMembers():0;
+    save(); renderAll(); toast("Added."+linkedNote(ml));});
   $("#incRules").addEventListener("click",()=>{
     S.settings.incent={review:Math.max(0,num($("#irv").value)),memberFirst:Math.max(0,num($("#im1").value))/100,
       memberNext:Math.max(0,num($("#im2").value))/100,split:$("#isp").value==="1",onJob:$("#ioj").value==="1"};
@@ -1512,7 +1550,8 @@ function renderJobs(){
       deposit:($("#jdep")&&$("#jdep").checked)?(num(S.settings.depositAmount)||50):0,
       payment:$("#jm").value,status:"Completed",
       techs:[$("#j1").value,$("#j2").value,$("#j3").value].filter(Boolean),adj:[0,0,0],hours:num($("#jh").value),notes:""});
-    const pp=periodOf(d); if(pp) CUR=pp.id; save(); fillPeriods(); renderAll(); toast("Job added.");});
+    const pp=periodOf(d); if(pp) CUR=pp.id; const ml=autoLinkMembers();
+    save(); fillPeriods(); renderAll(); toast("Job added."+linkedNote(ml));});
   $("#doImport").addEventListener("click",previewImport);
   $$("[data-del]").forEach(b=>b.addEventListener("click",()=>{
     S.jobs=S.jobs.filter(j=>j.id!==b.dataset.del); save(); renderAll();}));
@@ -1634,7 +1673,8 @@ function previewImport(){
     if(!pick.length) return toast("Nothing ticked.");
     pick.forEach(j=>{delete j._dup;delete j._unknown;delete j._period;delete j._badPay;S.jobs.push(j);});
     const f=periodOf(pick[0].date); if(f) CUR=f.id;
-    save(); fillPeriods(); renderAll(); toast("Imported "+pick.length+" job"+(pick.length===1?"":"s")+".");});
+    const ml=autoLinkMembers();
+    save(); fillPeriods(); renderAll(); toast("Imported "+pick.length+" job"+(pick.length===1?"":"s")+"."+linkedNote(ml));});
   $("#cancelImport").addEventListener("click",()=>{box.innerHTML="";$("#paste").value="";});
 }
 
@@ -2191,15 +2231,22 @@ function renderSetup(){
     </div>
     <div class="two">
       <div class="card"><h2>Crew</h2>
-        <div class="scroll"><table><thead><tr><th>Name</th><th>Role</th><th class="n">Rate</th><th>On the crew</th><th></th></tr></thead>
-          <tbody>${S.settings.techs.map((t,i)=>`<tr${t.active===false?' style="opacity:.55"':''}>
+        ${(()=>{ /* Leavers stay on the list (it is also the rate lookup) but out of
+                     sight: only the current crew is shown, the rest fold away. */
+          const row=(t,i)=>`<tr${t.active===false?' style="opacity:.55"':''}>
             <td><input value="${esc(t.name)}" data-tn="${i}" style="width:8rem"></td>
             <td><select data-tr="${i}">${ROLES.map(x=>`<option${x===t.role?" selected":""}>${x}</option>`).join("")}</select></td>
             <td class="n">${pct(baseRate(t.name))}</td>
             <td><label style="display:flex;gap:.35rem;align-items:center;font-size:.8rem">
               <input type="checkbox" data-ta="${i}"${t.active===false?"":" checked"}>
               ${t.active===false?'<span class="pill mut">left</span>':"active"}</label></td>
-            <td><button class="sm danger" data-tx="${i}">×</button></td></tr>`).join("")}</tbody></table></div>
+            <td>${t.active===false?"":`<button class="sm danger" data-tx="${i}">×</button>`}</td></tr>`;
+          const all=S.settings.techs.map((t,i)=>({t,i})), cur=all.filter(o=>o.t.active!==false), gone=all.filter(o=>o.t.active===false);
+          const head=`<thead><tr><th>Name</th><th>Role</th><th class="n">Rate</th><th>On the crew</th><th></th></tr></thead>`;
+          return `<div class="scroll"><table>${head}<tbody>${cur.map(o=>row(o.t,o.i)).join("")}</tbody></table></div>`+
+            (gone.length?`<details style="margin-top:.5rem"><summary class="hint" style="cursor:pointer">${gone.length} former crew — hidden from every picker, kept so their old pay periods still compute</summary>
+              <div class="scroll"><table>${head}<tbody>${gone.map(o=>row(o.t,o.i)).join("")}</tbody></table></div></details>`:"");
+        })()}
         <div class="bar"><button class="sm" id="addTech">Add a tech</button></div>
         <p class="hint" style="margin-top:.5rem">Owners are paid as a draw, not through QuickBooks payroll.</p>
         <p class="hint"><b>When someone leaves, untick "on the crew" — do not delete them.</b> This list is
